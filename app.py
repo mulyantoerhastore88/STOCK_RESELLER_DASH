@@ -6,141 +6,210 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime
 
-# --- CONFIGURATION ---
-st.set_page_config(page_title="Reseller Stock Dashboard (F213)", layout="wide")
+# --- PAGE CONFIG ---
+st.set_page_config(
+    page_title="Reseller Stock (F213)",
+    page_icon="📦",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-# --- LOAD DATA FUNCTION ---
-@st.cache_data(ttl=600)  # Cache data for 10 mins to speed up
+# --- CUSTOM CSS FOR MODERN UI ---
+st.markdown("""
+<style>
+    [data-testid="stMetricValue"] {
+        font-size: 24px;
+    }
+    .stAlert {
+        padding: 0.5rem;
+    }
+    .big-font {
+        font-size:18px !important;
+        font-weight: bold;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# --- CACHED DATA LOADING ---
+@st.cache_data(ttl=300)
 def load_data():
-    # Define scopes
-    scope = ["https://spreadsheets.google.com/feeds", 'https://www.googleapis.com/auth/spreadsheets',
-             "https://www.googleapis.com/auth/drive.file", "https://www.googleapis.com/auth/drive"]
+    try:
+        scope = ["https://spreadsheets.google.com/feeds", 'https://www.googleapis.com/auth/spreadsheets',
+                 "https://www.googleapis.com/auth/drive.file", "https://www.googleapis.com/auth/drive"]
+        
+        creds_dict = st.secrets["gcp_service_account"]
+        creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
+        client = gspread.authorize(creds)
 
-    # Load credentials from secrets
-    creds_dict = st.secrets["gcp_service_account"]
-    creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
-    client = gspread.authorize(creds)
+        # URL Sheet Bapak
+        spreadsheet_url = "https://docs.google.com/spreadsheets/d/1HfC0mLgfSaRa64dd3II6HFY1gTTeVt9WBTBUC5nfwac/edit?usp=sharing"
+        sh = client.open_by_url(spreadsheet_url)
+        worksheet = sh.get_worksheet(0)
+        
+        data = worksheet.get_all_records()
+        df = pd.DataFrame(data)
+        return df
+    except Exception as e:
+        st.error(f"Gagal koneksi ke GSheet: {e}")
+        return pd.DataFrame()
 
-    # Open Spreadsheet
-    # Pastikan link ini benar dan Service Account sudah jadi Editor/Viewer
-    spreadsheet_url = "https://docs.google.com/spreadsheets/d/1HfC0mLgfSaRa64dd3II6HFY1gTTeVt9WBTBUC5nfwac/edit?usp=sharing"
-    sh = client.open_by_url(spreadsheet_url)
-    worksheet = sh.get_worksheet(0)  # Assuming data is in Sheet1
-
-    # Get all values and convert to DataFrame
-    data = worksheet.get_all_records()
-    df = pd.DataFrame(data)
+# --- PREPROCESSING ---
+def process_data(df):
+    if df.empty: return df
+    
+    # 1. Filter F213
+    df = df[df['Storage Location'] == 'F213'].copy()
+    
+    # 2. Fix Numeric
+    numeric_cols = ['Unrestricted', 'Remaining Expiry Date']
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+            
+    # 3. Logic Expiry (Dalam Hari)
+    # 1 Bulan ~ 30 Hari
+    # 12 Bulan = 360 Hari | 18 Bulan = 540 Hari
+    def get_status(days):
+        if days < 360: return "🔴 Critical (< 12 Mo)"
+        elif days < 540: return "🟡 Warning (12-18 Mo)"
+        else: return "🟢 Safe (> 18 Mo)"
+        
+    df['Expiry Status'] = df['Remaining Expiry Date'].apply(get_status)
+    
+    # 4. Helper: Convert days to months string
+    df['Umur (Bulan)'] = (df['Remaining Expiry Date'] / 30).round(1)
     
     return df
 
-# --- PREPROCESSING FUNCTION ---
-def preprocess_data(df):
-    # 1. Filter Location F213
-    df_filtered = df[df['Storage Location'] == 'F213'].copy()
+# --- MAIN APP ---
+def main():
+    # Sidebar
+    st.sidebar.title("📦 Stock Monitor")
+    st.sidebar.caption("Reseller Location: F213")
     
-    # 2. Convert Data Types
-    # Handle numeric columns logic
-    numeric_cols = ['Unrestricted', 'Remaining Expiry Date']
-    for col in numeric_cols:
-        if col in df_filtered.columns:
-            df_filtered[col] = pd.to_numeric(df_filtered[col], errors='coerce').fillna(0)
-            
-    # 3. Create Expiry Status Grouping
-    def categorize_expiry(days):
-        if days < 0: return "Expired"
-        elif days <= 90: return "Critical (< 3 Mos)"
-        elif days <= 180: return "Warning (< 6 Mos)"
-        else: return "Safe (> 6 Mos)"
+    if st.sidebar.button("🔄 Refresh Data"):
+        st.cache_data.clear()
+        st.rerun()
+
+    # Load Data
+    raw_df = load_data()
+    df = process_data(raw_df)
     
-    if 'Remaining Expiry Date' in df_filtered.columns:
-        df_filtered['Expiry Status'] = df_filtered['Remaining Expiry Date'].apply(categorize_expiry)
-    
-    return df_filtered
+    if df.empty:
+        st.warning("Data kosong atau gagal dimuat.")
+        return
 
-# --- MAIN UI ---
-try:
-    with st.spinner('Loading live data from Google Sheets...'):
-        raw_df = load_data()
-        df = preprocess_data(raw_df)
-
-    st.title("📦 Reseller Stock Dashboard (Location: F213)")
-    st.markdown(f"**Last Updated:** {datetime.now().strftime('%d-%b-%Y %H:%M')}")
-    st.markdown("---")
-
-    # --- SIDEBAR FILTERS ---
-    st.sidebar.header("🔍 Filter Options")
-    
-    # Filter by Product Hierarchy 2 (Category/Brand) if exists
-    if 'Product Hierarchy 2' in df.columns:
-        categories = ['All'] + sorted(list(df['Product Hierarchy 2'].unique()))
-        selected_cat = st.sidebar.selectbox("Select Category (Hierarchy 2):", categories)
-        if selected_cat != 'All':
-            df = df[df['Product Hierarchy 2'] == selected_cat]
-
-    # Filter by Expiry Status
-    if 'Expiry Status' in df.columns:
-        expiry_opts = ['All'] + sorted(list(df['Expiry Status'].unique()))
-        selected_expiry = st.sidebar.multiselect("Filter Expiry Status:", expiry_opts, default='All')
-        if 'All' not in selected_expiry and selected_expiry:
-            df = df[df['Expiry Status'].isin(selected_expiry)]
-
-    # --- TOP METRICS ---
+    # --- TOP KPI ---
     total_qty = df['Unrestricted'].sum()
     total_sku = df['Material'].nunique()
+    critical_qty = df[df['Remaining Expiry Date'] < 360]['Unrestricted'].sum()
     
-    # Calculate Critical Stock (Less than 90 days)
-    critical_stock = df[df['Remaining Expiry Date'] <= 90]['Unrestricted'].sum()
-    
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Total Stock Qty", f"{total_qty:,.0f}")
-    col2.metric("Total SKU Variant", f"{total_sku}")
-    col3.metric("Critical Stock (<90 Days)", f"{critical_stock:,.0f}", delta_color="inverse")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Total Stock (Pcs)", f"{total_qty:,.0f}")
+    c2.metric("Total SKU", f"{total_sku}")
+    c3.metric("Critical Stock (<12 Mo)", f"{critical_qty:,.0f}", delta="Harusnya 0", delta_color="inverse")
+    c4.markdown(f"**Last Update:**\n{datetime.now().strftime('%H:%M')} WIB")
 
     st.markdown("---")
 
-    # --- CHARTS SECTION ---
-    c1, c2 = st.columns([2, 1])
+    # --- TABS LAYOUT ---
+    tab1, tab2 = st.tabs(["📊 Dashboard Overview", "🔍 SKU Inspector (Detail)"])
 
-    with c1:
-        st.subheader("📊 Top 10 Products by Quantity")
-        # Group by Material Desc to handle batches
-        top_products = df.groupby('Material Description')['Unrestricted'].sum().nlargest(10).reset_index()
-        fig_bar = px.bar(top_products, x='Unrestricted', y='Material Description', orientation='h', 
-                         text='Unrestricted', color='Unrestricted', color_continuous_scale='Blues')
-        fig_bar.update_layout(yaxis={'categoryorder':'total ascending'})
-        st.plotly_chart(fig_bar, use_container_width=True)
-
-    with c2:
-        st.subheader("⚠️ Stock Health (Expiry)")
-        if 'Expiry Status' in df.columns:
-            expiry_counts = df.groupby('Expiry Status')['Unrestricted'].sum().reset_index()
-            # Custom colors for safety
-            color_map = {
-                "Expired": "red",
-                "Critical (< 3 Mos)": "orange",
-                "Warning (< 6 Mos)": "yellow",
-                "Safe (> 6 Mos)": "green"
+    with tab1:
+        # Row 1: Charts
+        col_left, col_right = st.columns([2, 1])
+        
+        with col_left:
+            st.subheader("Distribusi Brand (Hierarchy 2)")
+            # Group by Hierarchy 2 (Brand)
+            if 'Product Hierarchy 2' in df.columns:
+                brand_grp = df.groupby('Product Hierarchy 2')['Unrestricted'].sum().reset_index()
+                fig_bar = px.bar(brand_grp, x='Product Hierarchy 2', y='Unrestricted',
+                                 color='Unrestricted', title="Stock per Brand",
+                                 text_auto='.2s', color_continuous_scale='Blues')
+                fig_bar.update_layout(xaxis_title="Brand", yaxis_title="Qty", showlegend=False)
+                st.plotly_chart(fig_bar, use_container_width=True)
+        
+        with col_right:
+            st.subheader("Kesehatan Stock (Expiry)")
+            expiry_grp = df.groupby('Expiry Status')['Unrestricted'].sum().reset_index()
+            # Custom Color Map
+            colors = {
+                "🔴 Critical (< 12 Mo)": "#FF4B4B",
+                "🟡 Warning (12-18 Mo)": "#FFA15A",
+                "🟢 Safe (> 18 Mo)": "#00CC96"
             }
-            fig_pie = px.pie(expiry_counts, values='Unrestricted', names='Expiry Status', 
-                             color='Expiry Status', color_discrete_map=color_map, hole=0.4)
+            fig_pie = px.pie(expiry_grp, values='Unrestricted', names='Expiry Status',
+                             color='Expiry Status', color_discrete_map=colors, hole=0.4)
+            fig_pie.update_layout(legend=dict(orientation="h", y=-0.1))
             st.plotly_chart(fig_pie, use_container_width=True)
 
-    # --- DETAILED TABLE ---
-    st.subheader("📋 Detailed Stock List")
-    
-    # Rename columns for better display
-    display_cols = ['Material', 'Material Description', 'Batch', 'Unrestricted', 
-                    'Expiry Date', 'Remaining Expiry Date', 'Expiry Status', 'Product Hierarchy 2']
-    
-    # Filter columns that actually exist
-    final_cols = [c for c in display_cols if c in df.columns]
-    
-    st.dataframe(
-        df[final_cols].sort_values(by='Unrestricted', ascending=False),
-        use_container_width=True,
-        hide_index=True
-    )
+        # Row 2: Tabel Warning (Hanya menampilkan yang bermasalah)
+        st.subheader("🚨 Early Warning System (Stock < 18 Bulan)")
+        problem_df = df[df['Remaining Expiry Date'] < 540][
+            ['Material', 'Material Description', 'Batch', 'Unrestricted', 'Umur (Bulan)', 'Expiry Status']
+        ].sort_values('Umur (Bulan)')
+        
+        if not problem_df.empty:
+            st.dataframe(problem_df, use_container_width=True, hide_index=True)
+        else:
+            st.success("✨ Semua stock aman! Tidak ada yang expired di bawah 18 bulan.")
 
-except Exception as e:
-    st.error(f"Terjadi kesalahan koneksi atau data: {e}")
-    st.info("Pastikan file Google Sheet sudah di-share ke email Service Account dan structure kolom sesuai.")
+    with tab2:
+        st.markdown("### 🔎 Cari Detail Produk")
+        
+        # 1. Filter Brand (Optional)
+        brand_list = ["All"] + sorted(df['Product Hierarchy 2'].astype(str).unique().tolist())
+        sel_brand = st.selectbox("Filter Brand (Hierarchy 2):", brand_list)
+        
+        temp_df = df if sel_brand == "All" else df[df['Product Hierarchy 2'] == sel_brand]
+        
+        # 2. Select SKU
+        # Bikin list unik: "Kode - Nama Barang"
+        temp_df['Display_Name'] = temp_df['Material'].astype(str) + " - " + temp_df['Material Description']
+        sku_list = sorted(temp_df['Display_Name'].unique().tolist())
+        
+        selected_sku_str = st.selectbox("Pilih SKU / Material:", sku_list)
+        
+        if selected_sku_str:
+            # Ambil Material Code dari string
+            sel_material_code = selected_sku_str.split(" - ")[0]
+            
+            # Filter Data
+            sku_data = df[df['Material'].astype(str) == sel_material_code]
+            
+            # --- PRODUCT CARD ---
+            with st.container():
+                st.info(f"📦 **{selected_sku_str}**")
+                
+                k1, k2, k3 = st.columns(3)
+                total_sku_qty = sku_data['Unrestricted'].sum()
+                min_month = sku_data['Umur (Bulan)'].min()
+                brand_name = sku_data['Product Hierarchy 2'].iloc[0]
+                
+                k1.metric("Total Qty", f"{total_sku_qty:,.0f}")
+                k2.metric("Expiry Terdekat", f"{min_month} Bulan")
+                k3.metric("Brand", brand_name)
+                
+                st.markdown("#### Detail Batch & Expiry")
+                
+                # Format tabel detail biar cantik
+                detail_table = sku_data[['Batch', 'Unrestricted', 'Expiry Date', 'Umur (Bulan)', 'Expiry Status']].sort_values('Umur (Bulan)')
+                
+                # Highlight baris
+                def highlight_status(val):
+                    color = ''
+                    if 'Critical' in val: color = 'background-color: #ffcccc' # Merah muda
+                    elif 'Warning' in val: color = 'background-color: #ffeebb' # Kuning muda
+                    elif 'Safe' in val: color = 'background-color: #ccffcc' # Hijau muda
+                    return color
+
+                st.dataframe(
+                    detail_table.style.applymap(highlight_status, subset=['Expiry Status'])
+                    .format({'Unrestricted': '{:,.0f}', 'Umur (Bulan)': '{:.1f} Bln'}),
+                    use_container_width=True,
+                    hide_index=True
+                )
+
+if __name__ == "__main__":
+    main()
