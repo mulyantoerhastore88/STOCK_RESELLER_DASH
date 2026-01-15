@@ -6,31 +6,77 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime
 
-# --- PAGE CONFIG ---
+# --- 1. PAGE CONFIGURATION ---
 st.set_page_config(
-    page_title="Reseller Stock (F213)",
-    page_icon="📦",
+    page_title="F213 Inventory Command Center",
+    page_icon="💎",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed" # Biar luas pas dibuka
 )
 
-# --- CUSTOM CSS FOR MODERN UI ---
+# --- 2. CUSTOM CSS (THE "MAKEUP") ---
 st.markdown("""
 <style>
-    [data-testid="stMetricValue"] {
-        font-size: 24px;
+    /* Main Background */
+    .stApp {
+        background-color: #f8f9fa;
     }
-    .stAlert {
-        padding: 0.5rem;
+    
+    /* Card Style for Metrics */
+    div[data-testid="stMetric"] {
+        background-color: #ffffff;
+        border: 1px solid #e0e0e0;
+        padding: 15px 20px;
+        border-radius: 10px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+        transition: transform 0.2s;
     }
-    .big-font {
-        font-size:18px !important;
+    div[data-testid="stMetric"]:hover {
+        transform: scale(1.02);
+        box-shadow: 0 6px 8px rgba(0,0,0,0.1);
+    }
+    
+    /* Custom Titles */
+    h1 {
+        color: #1f2937;
+        font-family: 'Helvetica Neue', sans-serif;
+        font-weight: 700;
+    }
+    h3 {
+        color: #374151;
+        padding-top: 10px;
+    }
+    
+    /* Sidebar Styling */
+    section[data-testid="stSidebar"] {
+        background-color: #111827;
+    }
+    section[data-testid="stSidebar"] h1, p {
+        color: #f3f4f6 !important;
+    }
+    
+    /* Tabs */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 10px;
+    }
+    .stTabs [data-baseweb="tab"] {
+        height: 50px;
+        white-space: pre-wrap;
+        background-color: #fff;
+        border-radius: 5px 5px 0 0;
+        gap: 1px;
+        padding-top: 10px;
+        padding-bottom: 10px;
+    }
+    .stTabs [aria-selected="true"] {
+        background-color: #e5e7eb;
+        color: #000;
         font-weight: bold;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# --- CACHED DATA LOADING ---
+# --- 3. DATA LOADER ---
 @st.cache_data(ttl=300)
 def load_data():
     try:
@@ -41,172 +87,197 @@ def load_data():
         creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
         client = gspread.authorize(creds)
 
-        # URL Sheet Bapak
         spreadsheet_url = "https://docs.google.com/spreadsheets/d/1HfC0mLgfSaRa64dd3II6HFY1gTTeVt9WBTBUC5nfwac/edit?usp=sharing"
         sh = client.open_by_url(spreadsheet_url)
         worksheet = sh.get_worksheet(0)
         
         data = worksheet.get_all_records()
-        df = pd.DataFrame(data)
-        return df
+        return pd.DataFrame(data)
     except Exception as e:
-        st.error(f"Gagal koneksi ke GSheet: {e}")
+        st.error(f"🔥 Koneksi Gagal: {e}")
         return pd.DataFrame()
 
-# --- PREPROCESSING ---
+# --- 4. DATA PROCESSING ---
 def process_data(df):
     if df.empty: return df
     
-    # 1. Filter F213
+    # Filter F213
     df = df[df['Storage Location'] == 'F213'].copy()
     
-    # 2. Fix Numeric
+    # Fix Types
     numeric_cols = ['Unrestricted', 'Remaining Expiry Date']
     for col in numeric_cols:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
             
-    # 3. Logic Expiry (Dalam Hari)
-    # 1 Bulan ~ 30 Hari
-    # 12 Bulan = 360 Hari | 18 Bulan = 540 Hari
+    # Logic Expiry (Hari)
     def get_status(days):
-        if days < 360: return "🔴 Critical (< 12 Mo)"
-        elif days < 540: return "🟡 Warning (12-18 Mo)"
-        else: return "🟢 Safe (> 18 Mo)"
+        if days < 360: return "Critical"
+        elif days < 540: return "Warning"
+        else: return "Safe"
         
-    df['Expiry Status'] = df['Remaining Expiry Date'].apply(get_status)
-    
-    # 4. Helper: Convert days to months string
+    df['Status'] = df['Remaining Expiry Date'].apply(get_status)
     df['Umur (Bulan)'] = (df['Remaining Expiry Date'] / 30).round(1)
     
     return df
 
-# --- MAIN APP ---
+# --- 5. MAIN UI ---
 def main():
-    # Sidebar
-    st.sidebar.title("📦 Stock Monitor")
-    st.sidebar.caption("Reseller Location: F213")
-    
-    if st.sidebar.button("🔄 Refresh Data"):
-        st.cache_data.clear()
-        st.rerun()
+    # --- HEADER ---
+    c1, c2 = st.columns([3, 1])
+    with c1:
+        st.title("📦 F213 Inventory Command Center")
+        st.caption("Monitoring Real-time Stock Reseller & Expiry Health")
+    with c2:
+        if st.button("🔄 Refresh Live Data", type="primary", use_container_width=True):
+            st.cache_data.clear()
+            st.rerun()
+        st.markdown(f"<div style='text-align: right; color: grey; font-size: 12px;'>Last Sync: {datetime.now().strftime('%H:%M:%S')}</div>", unsafe_allow_html=True)
 
     # Load Data
     raw_df = load_data()
     df = process_data(raw_df)
     
     if df.empty:
-        st.warning("Data kosong atau gagal dimuat.")
+        st.warning("⚠️ Data Kosong. Cek koneksi Google Sheet.")
         return
-
-    # --- TOP KPI ---
-    total_qty = df['Unrestricted'].sum()
-    total_sku = df['Material'].nunique()
-    critical_qty = df[df['Remaining Expiry Date'] < 360]['Unrestricted'].sum()
-    
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Total Stock (Pcs)", f"{total_qty:,.0f}")
-    c2.metric("Total SKU", f"{total_sku}")
-    c3.metric("Critical Stock (<12 Mo)", f"{critical_qty:,.0f}", delta="Harusnya 0", delta_color="inverse")
-    c4.markdown(f"**Last Update:**\n{datetime.now().strftime('%H:%M')} WIB")
 
     st.markdown("---")
 
-    # --- TABS LAYOUT ---
-    tab1, tab2 = st.tabs(["📊 Dashboard Overview", "🔍 SKU Inspector (Detail)"])
+    # --- KPI CARDS (METRICS) ---
+    total_qty = df['Unrestricted'].sum()
+    total_sku = df['Material'].nunique()
+    critical_qty = df[df['Status'] == 'Critical']['Unrestricted'].sum()
+    critical_sku_count = df[df['Status'] == 'Critical']['Material'].nunique()
+    
+    kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+    
+    kpi1.metric("📦 Total Stock", f"{total_qty:,.0f}", delta="Unit")
+    kpi2.metric("🔖 Total SKU", f"{total_sku}", delta="Varian")
+    kpi3.metric("🚨 Critical Qty (<12 Bln)", f"{critical_qty:,.0f}", delta="Items", delta_color="inverse")
+    kpi4.metric("⚠️ SKU Berisiko", f"{critical_sku_count}", delta="Perlu Action", delta_color="inverse")
 
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # --- TABS ---
+    tab1, tab2 = st.tabs(["📊 EXECUTIVE SUMMARY", "🔎 SKU INSPECTOR"])
+
+    # === TAB 1: VISUALISASI ===
     with tab1:
-        # Row 1: Charts
-        col_left, col_right = st.columns([2, 1])
+        row1_col1, row1_col2 = st.columns([2, 1])
         
-        with col_left:
-            st.subheader("Distribusi Brand (Hierarchy 2)")
-            # Group by Hierarchy 2 (Brand)
+        with row1_col1:
+            st.subheader("Distribusi Brand (Top 10)")
             if 'Product Hierarchy 2' in df.columns:
-                brand_grp = df.groupby('Product Hierarchy 2')['Unrestricted'].sum().reset_index()
-                fig_bar = px.bar(brand_grp, x='Product Hierarchy 2', y='Unrestricted',
-                                 color='Unrestricted', title="Stock per Brand",
-                                 text_auto='.2s', color_continuous_scale='Blues')
-                fig_bar.update_layout(xaxis_title="Brand", yaxis_title="Qty", showlegend=False)
-                st.plotly_chart(fig_bar, use_container_width=True)
-        
-        with col_right:
-            st.subheader("Kesehatan Stock (Expiry)")
-            expiry_grp = df.groupby('Expiry Status')['Unrestricted'].sum().reset_index()
-            # Custom Color Map
-            colors = {
-                "🔴 Critical (< 12 Mo)": "#FF4B4B",
-                "🟡 Warning (12-18 Mo)": "#FFA15A",
-                "🟢 Safe (> 18 Mo)": "#00CC96"
+                brand_grp = df.groupby('Product Hierarchy 2')['Unrestricted'].sum().reset_index().sort_values('Unrestricted', ascending=True).tail(10)
+                
+                fig = px.bar(brand_grp, x='Unrestricted', y='Product Hierarchy 2', 
+                             text='Unrestricted', orientation='h',
+                             color='Unrestricted', color_continuous_scale='Mint')
+                fig.update_traces(texttemplate='%{text:.2s}', textposition='outside')
+                fig.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", xaxis_title=None, yaxis_title=None)
+                st.plotly_chart(fig, use_container_width=True)
+
+        with row1_col2:
+            st.subheader("Kesehatan Stock")
+            status_grp = df.groupby('Status')['Unrestricted'].sum().reset_index()
+            
+            # Warna Custom biar cantik
+            color_map = {
+                "Critical": "#ef4444", # Red
+                "Warning": "#f59e0b",  # Amber
+                "Safe": "#10b981"      # Emerald
             }
-            fig_pie = px.pie(expiry_grp, values='Unrestricted', names='Expiry Status',
-                             color='Expiry Status', color_discrete_map=colors, hole=0.4)
-            fig_pie.update_layout(legend=dict(orientation="h", y=-0.1))
+            
+            fig_pie = px.donut(status_grp, values='Unrestricted', names='Status', 
+                               color='Status', color_discrete_map=color_map, hole=0.6)
+            fig_pie.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", legend=dict(orientation="h", y=-0.1))
             st.plotly_chart(fig_pie, use_container_width=True)
 
-        # Row 2: Tabel Warning (Hanya menampilkan yang bermasalah)
-        st.subheader("🚨 Early Warning System (Stock < 18 Bulan)")
-        problem_df = df[df['Remaining Expiry Date'] < 540][
-            ['Material', 'Material Description', 'Batch', 'Unrestricted', 'Umur (Bulan)', 'Expiry Status']
-        ].sort_values('Umur (Bulan)')
+        # --- TABEL MODERN ---
+        st.subheader("🚨 Stock Alert: Barang Expired < 18 Bulan")
         
-        if not problem_df.empty:
-            st.dataframe(problem_df, use_container_width=True, hide_index=True)
-        else:
-            st.success("✨ Semua stock aman! Tidak ada yang expired di bawah 18 bulan.")
+        # Filter Data Warning/Critical
+        alert_df = df[df['Remaining Expiry Date'] < 540][[
+            'Material', 'Material Description', 'Batch', 'Unrestricted', 'Umur (Bulan)', 'Status'
+        ]].sort_values('Umur (Bulan)')
 
+        if not alert_df.empty:
+            st.dataframe(
+                alert_df,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Status": st.column_config.SelectboxColumn(
+                        "Status Kesehatan",
+                        help="Critical < 12 Bulan, Warning 12-18 Bulan",
+                        width="medium",
+                        options=["Critical", "Warning", "Safe"],
+                        required=True,
+                    ),
+                    "Umur (Bulan)": st.column_config.ProgressColumn(
+                        "Sisa Umur (Bln)",
+                        help="Semakin pendek bar, semakin dekat expired",
+                        format="%.1f Bln",
+                        min_value=0,
+                        max_value=30, # Asumsi max shelf life 30 bulan visualnya
+                    ),
+                    "Unrestricted": st.column_config.NumberColumn(
+                        "Stock Qty",
+                        format="%d Pcs"
+                    )
+                }
+            )
+        else:
+            st.success("✅ Clean! Tidak ada barang dengan expired di bawah 18 bulan.")
+
+    # === TAB 2: DETAIL SKU ===
     with tab2:
-        st.markdown("### 🔎 Cari Detail Produk")
+        col_search, col_brand = st.columns([2, 1])
         
-        # 1. Filter Brand (Optional)
-        brand_list = ["All"] + sorted(df['Product Hierarchy 2'].astype(str).unique().tolist())
-        sel_brand = st.selectbox("Filter Brand (Hierarchy 2):", brand_list)
+        with col_brand:
+            brand_opts = ["All Brands"] + sorted(df['Product Hierarchy 2'].astype(str).unique().tolist())
+            sel_brand = st.selectbox("Filter Brand:", brand_opts)
         
-        temp_df = df if sel_brand == "All" else df[df['Product Hierarchy 2'] == sel_brand]
+        # Filter df based on brand first
+        temp_df = df if sel_brand == "All Brands" else df[df['Product Hierarchy 2'] == sel_brand]
         
-        # 2. Select SKU
-        # Bikin list unik: "Kode - Nama Barang"
-        temp_df['Display_Name'] = temp_df['Material'].astype(str) + " - " + temp_df['Material Description']
-        sku_list = sorted(temp_df['Display_Name'].unique().tolist())
-        
-        selected_sku_str = st.selectbox("Pilih SKU / Material:", sku_list)
-        
-        if selected_sku_str:
-            # Ambil Material Code dari string
-            sel_material_code = selected_sku_str.split(" - ")[0]
+        with col_search:
+            # Bikin list pencarian yg enak dibaca
+            temp_df['Search_Key'] = temp_df['Material'].astype(str) + " | " + temp_df['Material Description']
+            search_list = sorted(temp_df['Search_Key'].unique().tolist())
+            selected_item = st.selectbox("🔍 Cari SKU / Nama Produk:", search_list)
+
+        if selected_item:
+            # Ambil Material Code
+            sel_code = selected_item.split(" | ")[0]
+            item_data = df[df['Material'].astype(str) == sel_code]
             
-            # Filter Data
-            sku_data = df[df['Material'].astype(str) == sel_material_code]
-            
-            # --- PRODUCT CARD ---
+            # --- INFO CARD PRODUK ---
             with st.container():
-                st.info(f"📦 **{selected_sku_str}**")
+                st.markdown(f"### 📦 {item_data['Material Description'].iloc[0]}")
+                st.markdown(f"**SKU:** `{sel_code}` &nbsp; | &nbsp; **Brand:** {item_data['Product Hierarchy 2'].iloc[0]}")
                 
-                k1, k2, k3 = st.columns(3)
-                total_sku_qty = sku_data['Unrestricted'].sum()
-                min_month = sku_data['Umur (Bulan)'].min()
-                brand_name = sku_data['Product Hierarchy 2'].iloc[0]
+                # Metric kecil di dalam detail
+                m1, m2, m3 = st.columns(3)
+                m1.info(f"**Total Qty:** {item_data['Unrestricted'].sum():,.0f}")
+                m2.warning(f"**Batch Termuda:** {item_data['Umur (Bulan)'].max()} Bln")
+                m3.error(f"**Batch Tertua:** {item_data['Umur (Bulan)'].min()} Bln")
                 
-                k1.metric("Total Qty", f"{total_sku_qty:,.0f}")
-                k2.metric("Expiry Terdekat", f"{min_month} Bulan")
-                k3.metric("Brand", brand_name)
+                st.markdown("#### 📅 Detail Batch & Expiry")
                 
-                st.markdown("#### Detail Batch & Expiry")
+                # Tabel Detail dengan Conditional Formatting (Highlight)
+                detail_view = item_data[['Batch', 'Unrestricted', 'Expiry Date', 'Umur (Bulan)', 'Status']].sort_values('Umur (Bulan)')
                 
-                # Format tabel detail biar cantik
-                detail_table = sku_data[['Batch', 'Unrestricted', 'Expiry Date', 'Umur (Bulan)', 'Expiry Status']].sort_values('Umur (Bulan)')
-                
-                # Highlight baris
-                def highlight_status(val):
+                def highlight_row(val):
                     color = ''
-                    if 'Critical' in val: color = 'background-color: #ffcccc' # Merah muda
-                    elif 'Warning' in val: color = 'background-color: #ffeebb' # Kuning muda
-                    elif 'Safe' in val: color = 'background-color: #ccffcc' # Hijau muda
+                    if val == 'Critical': color = 'background-color: #fee2e2; color: #991b1b' # Red 200
+                    elif val == 'Warning': color = 'background-color: #fef3c7; color: #92400e' # Amber 200
+                    else: color = 'background-color: #d1fae5; color: #065f46' # Emerald 200
                     return color
 
                 st.dataframe(
-                    detail_table.style.applymap(highlight_status, subset=['Expiry Status'])
-                    .format({'Unrestricted': '{:,.0f}', 'Umur (Bulan)': '{:.1f} Bln'}),
+                    detail_view.style.applymap(highlight_row, subset=['Status']),
                     use_container_width=True,
                     hide_index=True
                 )
