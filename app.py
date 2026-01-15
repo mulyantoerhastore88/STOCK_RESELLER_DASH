@@ -14,26 +14,58 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# --- 2. CUSTOM CSS ---
+# --- 2. CUSTOM CSS (FIX WARNA & KONTRAS) ---
 st.markdown("""
 <style>
-    .stApp { background-color: #f8f9fa; }
+    /* 1. PAKSA BACKGROUND TERANG & TEKS GELAP (Global) */
+    .stApp {
+        background-color: #f8f9fa !important;
+        color: #1f2937 !important;
+    }
+    
+    /* 2. PAKSA SEMUA TEKS JADI HITAM/ABU TUA */
+    p, h1, h2, h3, h4, h5, h6, span, div, li {
+        color: #1f2937;
+    }
+
+    /* 3. Metric Cards (Kotak Angka) */
     div[data-testid="stMetric"] {
-        background-color: #ffffff;
+        background-color: #ffffff !important;
         border: 1px solid #e0e0e0;
         padding: 15px 20px;
         border-radius: 10px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
-        transition: transform 0.2s;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
     }
-    div[data-testid="stMetric"]:hover {
-        transform: scale(1.02);
-        box-shadow: 0 6px 8px rgba(0,0,0,0.1);
+    /* Label Metric (Judul kecil di atas angka) */
+    div[data-testid="stMetricLabel"] p {
+        color: #6b7280 !important; /* Abu-abu */
     }
-    h1 { color: #1f2937; font-family: 'Helvetica Neue', sans-serif; font-weight: 700; }
-    h3 { color: #374151; padding-top: 10px; }
-    section[data-testid="stSidebar"] { background-color: #111827; }
-    section[data-testid="stSidebar"] h1, p { color: #f3f4f6 !important; }
+    /* Value Metric (Angka Besar) */
+    div[data-testid="stMetricValue"] {
+        color: #111827 !important; /* Hitam Pekat */
+    }
+
+    /* 4. SIDEBAR (PENGECUALIAN: Background Gelap, Teks Putih) */
+    section[data-testid="stSidebar"] {
+        background-color: #111827 !important;
+    }
+    section[data-testid="stSidebar"] h1, 
+    section[data-testid="stSidebar"] h2, 
+    section[data-testid="stSidebar"] h3, 
+    section[data-testid="stSidebar"] p, 
+    section[data-testid="stSidebar"] span,
+    section[data-testid="stSidebar"] div {
+        color: #f3f4f6 !important; /* Putih */
+    }
+
+    /* 5. Tabs */
+    .stTabs [data-baseweb="tab"] {
+        color: #374151 !important;
+    }
+    .stTabs [aria-selected="true"] {
+        color: #000000 !important;
+        font-weight: bold;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -44,9 +76,8 @@ def load_data():
         scope = ["https://spreadsheets.google.com/feeds", 'https://www.googleapis.com/auth/spreadsheets',
                  "https://www.googleapis.com/auth/drive.file", "https://www.googleapis.com/auth/drive"]
         
-        # Cek apakah secrets ada
         if "gcp_service_account" not in st.secrets:
-            st.error("❌ Secrets 'gcp_service_account' belum di-set di Streamlit Cloud!")
+            st.error("❌ Secrets 'gcp_service_account' belum di-set!")
             return pd.DataFrame()
 
         creds_dict = st.secrets["gcp_service_account"]
@@ -67,19 +98,14 @@ def load_data():
 def process_data(df):
     if df.empty: return df
     
-    # Filter F213
     if 'Storage Location' in df.columns:
         df = df[df['Storage Location'] == 'F213'].copy()
     
-    # Fix Types
     numeric_cols = ['Unrestricted', 'Remaining Expiry Date']
     for col in numeric_cols:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
             
-    # Logic Expiry (Hari)
-    # < 360 hari (12 bulan) = Critical
-    # < 540 hari (18 bulan) = Warning
     def get_status(days):
         if days < 360: return "Critical"
         elif days < 540: return "Warning"
@@ -102,14 +128,13 @@ def main():
         if st.button("🔄 Refresh Live Data", type="primary", use_container_width=True):
             st.cache_data.clear()
             st.rerun()
-        st.markdown(f"<div style='text-align: right; color: grey; font-size: 12px;'>Last Sync: {datetime.now().strftime('%H:%M:%S')}</div>", unsafe_allow_html=True)
+        st.markdown(f"<div style='text-align: right; color: #6b7280; font-size: 12px;'>Last Sync: {datetime.now().strftime('%H:%M:%S')}</div>", unsafe_allow_html=True)
 
-    # Load Data
     raw_df = load_data()
     df = process_data(raw_df)
     
     if df.empty:
-        st.warning("⚠️ Data Kosong atau Gagal Load. Cek Secrets dan Koneksi.")
+        st.warning("⚠️ Data Kosong. Cek koneksi Google Sheet.")
         return
 
     st.markdown("---")
@@ -140,32 +165,35 @@ def main():
             if 'Product Hierarchy 2' in df.columns:
                 brand_grp = df.groupby('Product Hierarchy 2')['Unrestricted'].sum().reset_index().sort_values('Unrestricted', ascending=True).tail(10)
                 
+                # Fix Warna Teks Chart biar Kelihatan
                 fig = px.bar(brand_grp, x='Unrestricted', y='Product Hierarchy 2', 
                              text='Unrestricted', orientation='h',
                              color='Unrestricted', color_continuous_scale='Mint')
-                fig.update_traces(texttemplate='%{text:.2s}', textposition='outside')
-                fig.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", xaxis_title=None, yaxis_title=None)
+                fig.update_traces(texttemplate='%{text:.2s}', textposition='outside', textfont_color='black')
+                fig.update_layout(
+                    plot_bgcolor="rgba(0,0,0,0)", 
+                    paper_bgcolor="rgba(0,0,0,0)", 
+                    xaxis_title=None, 
+                    yaxis_title=None,
+                    font=dict(color="#1f2937") # Font Chart Hitam
+                )
                 st.plotly_chart(fig, use_container_width=True)
 
         with row1_col2:
             st.subheader("Kesehatan Stock")
             status_grp = df.groupby('Status')['Unrestricted'].sum().reset_index()
+            color_map = {"Critical": "#ef4444", "Warning": "#f59e0b", "Safe": "#10b981"}
             
-            color_map = {
-                "Critical": "#ef4444", # Red
-                "Warning": "#f59e0b",  # Amber
-                "Safe": "#10b981"      # Emerald
-            }
-            
-            # --- FIX ERROR DISINI: Pake px.pie bukan px.donut ---
             fig_pie = px.pie(status_grp, values='Unrestricted', names='Status', 
                              color='Status', color_discrete_map=color_map, hole=0.6)
-            # ----------------------------------------------------
-            
-            fig_pie.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", legend=dict(orientation="h", y=-0.1))
+            fig_pie.update_layout(
+                plot_bgcolor="rgba(0,0,0,0)", 
+                paper_bgcolor="rgba(0,0,0,0)", 
+                legend=dict(orientation="h", y=-0.1),
+                font=dict(color="#1f2937") # Font Chart Hitam
+            )
             st.plotly_chart(fig_pie, use_container_width=True)
 
-        # --- TABEL MODERN ---
         st.subheader("🚨 Stock Alert: Barang Expired < 18 Bulan")
         
         alert_df = df[df['Remaining Expiry Date'] < 540][[
@@ -202,7 +230,6 @@ def main():
     # === TAB 2: DETAIL SKU ===
     with tab2:
         col_search, col_brand = st.columns([2, 1])
-        
         with col_brand:
             if 'Product Hierarchy 2' in df.columns:
                 brand_opts = ["All Brands"] + sorted(df['Product Hierarchy 2'].astype(str).unique().tolist())
@@ -221,8 +248,13 @@ def main():
             item_data = df[df['Material'].astype(str) == sel_code]
             
             with st.container():
-                st.markdown(f"### 📦 {item_data['Material Description'].iloc[0]}")
-                st.markdown(f"**SKU:** `{sel_code}`")
+                # Styling khusus untuk text card detail
+                st.markdown(f"""
+                <div style='background-color: white; padding: 20px; border-radius: 10px; border: 1px solid #e0e0e0; margin-bottom: 20px;'>
+                    <h3 style='margin:0; color: #1f2937;'>📦 {item_data['Material Description'].iloc[0]}</h3>
+                    <p style='color: #6b7280;'>SKU: <b>{sel_code}</b> &nbsp;|&nbsp; Brand: <b>{item_data['Product Hierarchy 2'].iloc[0]}</b></p>
+                </div>
+                """, unsafe_allow_html=True)
                 
                 m1, m2, m3 = st.columns(3)
                 m1.info(f"**Total Qty:** {item_data['Unrestricted'].sum():,.0f}")
@@ -234,11 +266,9 @@ def main():
                 detail_view = item_data[['Batch', 'Unrestricted', 'Expiry Date', 'Umur (Bulan)', 'Status']].sort_values('Umur (Bulan)')
                 
                 def highlight_row(val):
-                    color = ''
-                    if val == 'Critical': color = 'background-color: #fee2e2; color: #991b1b'
-                    elif val == 'Warning': color = 'background-color: #fef3c7; color: #92400e'
-                    else: color = 'background-color: #d1fae5; color: #065f46'
-                    return color
+                    if val == 'Critical': return 'background-color: #fee2e2; color: #991b1b'
+                    elif val == 'Warning': return 'background-color: #fef3c7; color: #92400e'
+                    else: return 'background-color: #d1fae5; color: #065f46'
 
                 st.dataframe(
                     detail_view.style.applymap(highlight_row, subset=['Status']),
