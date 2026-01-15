@@ -11,18 +11,13 @@ st.set_page_config(
     page_title="F213 Inventory Command Center",
     page_icon="💎",
     layout="wide",
-    initial_sidebar_state="collapsed" # Biar luas pas dibuka
+    initial_sidebar_state="collapsed"
 )
 
-# --- 2. CUSTOM CSS (THE "MAKEUP") ---
+# --- 2. CUSTOM CSS ---
 st.markdown("""
 <style>
-    /* Main Background */
-    .stApp {
-        background-color: #f8f9fa;
-    }
-    
-    /* Card Style for Metrics */
+    .stApp { background-color: #f8f9fa; }
     div[data-testid="stMetric"] {
         background-color: #ffffff;
         border: 1px solid #e0e0e0;
@@ -35,44 +30,10 @@ st.markdown("""
         transform: scale(1.02);
         box-shadow: 0 6px 8px rgba(0,0,0,0.1);
     }
-    
-    /* Custom Titles */
-    h1 {
-        color: #1f2937;
-        font-family: 'Helvetica Neue', sans-serif;
-        font-weight: 700;
-    }
-    h3 {
-        color: #374151;
-        padding-top: 10px;
-    }
-    
-    /* Sidebar Styling */
-    section[data-testid="stSidebar"] {
-        background-color: #111827;
-    }
-    section[data-testid="stSidebar"] h1, p {
-        color: #f3f4f6 !important;
-    }
-    
-    /* Tabs */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 10px;
-    }
-    .stTabs [data-baseweb="tab"] {
-        height: 50px;
-        white-space: pre-wrap;
-        background-color: #fff;
-        border-radius: 5px 5px 0 0;
-        gap: 1px;
-        padding-top: 10px;
-        padding-bottom: 10px;
-    }
-    .stTabs [aria-selected="true"] {
-        background-color: #e5e7eb;
-        color: #000;
-        font-weight: bold;
-    }
+    h1 { color: #1f2937; font-family: 'Helvetica Neue', sans-serif; font-weight: 700; }
+    h3 { color: #374151; padding-top: 10px; }
+    section[data-testid="stSidebar"] { background-color: #111827; }
+    section[data-testid="stSidebar"] h1, p { color: #f3f4f6 !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -83,6 +44,11 @@ def load_data():
         scope = ["https://spreadsheets.google.com/feeds", 'https://www.googleapis.com/auth/spreadsheets',
                  "https://www.googleapis.com/auth/drive.file", "https://www.googleapis.com/auth/drive"]
         
+        # Cek apakah secrets ada
+        if "gcp_service_account" not in st.secrets:
+            st.error("❌ Secrets 'gcp_service_account' belum di-set di Streamlit Cloud!")
+            return pd.DataFrame()
+
         creds_dict = st.secrets["gcp_service_account"]
         creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
         client = gspread.authorize(creds)
@@ -102,7 +68,8 @@ def process_data(df):
     if df.empty: return df
     
     # Filter F213
-    df = df[df['Storage Location'] == 'F213'].copy()
+    if 'Storage Location' in df.columns:
+        df = df[df['Storage Location'] == 'F213'].copy()
     
     # Fix Types
     numeric_cols = ['Unrestricted', 'Remaining Expiry Date']
@@ -111,13 +78,16 @@ def process_data(df):
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
             
     # Logic Expiry (Hari)
+    # < 360 hari (12 bulan) = Critical
+    # < 540 hari (18 bulan) = Warning
     def get_status(days):
         if days < 360: return "Critical"
         elif days < 540: return "Warning"
         else: return "Safe"
         
-    df['Status'] = df['Remaining Expiry Date'].apply(get_status)
-    df['Umur (Bulan)'] = (df['Remaining Expiry Date'] / 30).round(1)
+    if 'Remaining Expiry Date' in df.columns:
+        df['Status'] = df['Remaining Expiry Date'].apply(get_status)
+        df['Umur (Bulan)'] = (df['Remaining Expiry Date'] / 30).round(1)
     
     return df
 
@@ -139,19 +109,18 @@ def main():
     df = process_data(raw_df)
     
     if df.empty:
-        st.warning("⚠️ Data Kosong. Cek koneksi Google Sheet.")
+        st.warning("⚠️ Data Kosong atau Gagal Load. Cek Secrets dan Koneksi.")
         return
 
     st.markdown("---")
 
-    # --- KPI CARDS (METRICS) ---
+    # --- KPI CARDS ---
     total_qty = df['Unrestricted'].sum()
     total_sku = df['Material'].nunique()
     critical_qty = df[df['Status'] == 'Critical']['Unrestricted'].sum()
     critical_sku_count = df[df['Status'] == 'Critical']['Material'].nunique()
     
     kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-    
     kpi1.metric("📦 Total Stock", f"{total_qty:,.0f}", delta="Unit")
     kpi2.metric("🔖 Total SKU", f"{total_sku}", delta="Varian")
     kpi3.metric("🚨 Critical Qty (<12 Bln)", f"{critical_qty:,.0f}", delta="Items", delta_color="inverse")
@@ -182,22 +151,23 @@ def main():
             st.subheader("Kesehatan Stock")
             status_grp = df.groupby('Status')['Unrestricted'].sum().reset_index()
             
-            # Warna Custom biar cantik
             color_map = {
                 "Critical": "#ef4444", # Red
                 "Warning": "#f59e0b",  # Amber
                 "Safe": "#10b981"      # Emerald
             }
             
-            fig_pie = px.donut(status_grp, values='Unrestricted', names='Status', 
-                               color='Status', color_discrete_map=color_map, hole=0.6)
+            # --- FIX ERROR DISINI: Pake px.pie bukan px.donut ---
+            fig_pie = px.pie(status_grp, values='Unrestricted', names='Status', 
+                             color='Status', color_discrete_map=color_map, hole=0.6)
+            # ----------------------------------------------------
+            
             fig_pie.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", legend=dict(orientation="h", y=-0.1))
             st.plotly_chart(fig_pie, use_container_width=True)
 
         # --- TABEL MODERN ---
         st.subheader("🚨 Stock Alert: Barang Expired < 18 Bulan")
         
-        # Filter Data Warning/Critical
         alert_df = df[df['Remaining Expiry Date'] < 540][[
             'Material', 'Material Description', 'Batch', 'Unrestricted', 'Umur (Bulan)', 'Status'
         ]].sort_values('Umur (Bulan)')
@@ -210,17 +180,15 @@ def main():
                 column_config={
                     "Status": st.column_config.SelectboxColumn(
                         "Status Kesehatan",
-                        help="Critical < 12 Bulan, Warning 12-18 Bulan",
                         width="medium",
                         options=["Critical", "Warning", "Safe"],
                         required=True,
                     ),
                     "Umur (Bulan)": st.column_config.ProgressColumn(
                         "Sisa Umur (Bln)",
-                        help="Semakin pendek bar, semakin dekat expired",
                         format="%.1f Bln",
                         min_value=0,
-                        max_value=30, # Asumsi max shelf life 30 bulan visualnya
+                        max_value=30,
                     ),
                     "Unrestricted": st.column_config.NumberColumn(
                         "Stock Qty",
@@ -236,29 +204,26 @@ def main():
         col_search, col_brand = st.columns([2, 1])
         
         with col_brand:
-            brand_opts = ["All Brands"] + sorted(df['Product Hierarchy 2'].astype(str).unique().tolist())
-            sel_brand = st.selectbox("Filter Brand:", brand_opts)
-        
-        # Filter df based on brand first
-        temp_df = df if sel_brand == "All Brands" else df[df['Product Hierarchy 2'] == sel_brand]
+            if 'Product Hierarchy 2' in df.columns:
+                brand_opts = ["All Brands"] + sorted(df['Product Hierarchy 2'].astype(str).unique().tolist())
+                sel_brand = st.selectbox("Filter Brand:", brand_opts)
+                temp_df = df if sel_brand == "All Brands" else df[df['Product Hierarchy 2'] == sel_brand]
+            else:
+                temp_df = df
         
         with col_search:
-            # Bikin list pencarian yg enak dibaca
             temp_df['Search_Key'] = temp_df['Material'].astype(str) + " | " + temp_df['Material Description']
             search_list = sorted(temp_df['Search_Key'].unique().tolist())
             selected_item = st.selectbox("🔍 Cari SKU / Nama Produk:", search_list)
 
         if selected_item:
-            # Ambil Material Code
             sel_code = selected_item.split(" | ")[0]
             item_data = df[df['Material'].astype(str) == sel_code]
             
-            # --- INFO CARD PRODUK ---
             with st.container():
                 st.markdown(f"### 📦 {item_data['Material Description'].iloc[0]}")
-                st.markdown(f"**SKU:** `{sel_code}` &nbsp; | &nbsp; **Brand:** {item_data['Product Hierarchy 2'].iloc[0]}")
+                st.markdown(f"**SKU:** `{sel_code}`")
                 
-                # Metric kecil di dalam detail
                 m1, m2, m3 = st.columns(3)
                 m1.info(f"**Total Qty:** {item_data['Unrestricted'].sum():,.0f}")
                 m2.warning(f"**Batch Termuda:** {item_data['Umur (Bulan)'].max()} Bln")
@@ -266,14 +231,13 @@ def main():
                 
                 st.markdown("#### 📅 Detail Batch & Expiry")
                 
-                # Tabel Detail dengan Conditional Formatting (Highlight)
                 detail_view = item_data[['Batch', 'Unrestricted', 'Expiry Date', 'Umur (Bulan)', 'Status']].sort_values('Umur (Bulan)')
                 
                 def highlight_row(val):
                     color = ''
-                    if val == 'Critical': color = 'background-color: #fee2e2; color: #991b1b' # Red 200
-                    elif val == 'Warning': color = 'background-color: #fef3c7; color: #92400e' # Amber 200
-                    else: color = 'background-color: #d1fae5; color: #065f46' # Emerald 200
+                    if val == 'Critical': color = 'background-color: #fee2e2; color: #991b1b'
+                    elif val == 'Warning': color = 'background-color: #fef3c7; color: #92400e'
+                    else: color = 'background-color: #d1fae5; color: #065f46'
                     return color
 
                 st.dataframe(
