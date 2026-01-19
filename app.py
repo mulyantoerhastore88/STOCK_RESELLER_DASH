@@ -2,10 +2,12 @@ import streamlit as st
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseDownload
+import io
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime
-import re
 
 # --- 1. PAGE CONFIGURATION ---
 st.set_page_config(
@@ -65,7 +67,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 3. DATA LOADER DARI GOOGLE DRIVE FOLDER ---
+# --- 3. DATA LOADER DARI GOOGLE DRIVE FOLDER (REAL) ---
 @st.cache_data(ttl=300)
 def load_data():
     try:
@@ -80,89 +82,87 @@ def load_data():
 
         creds_dict = st.secrets["gcp_service_account"]
         creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
-        client = gspread.authorize(creds)
         
-        # ID folder dari URL yang diberikan
+        # Inisialisasi Google Drive API
+        drive_service = build('drive', 'v3', credentials=creds)
+        
+        # Folder ID dari URL: https://drive.google.com/drive/folders/1hSnG1XP-nsw1CbhLlHRo_PiiN45IHbXu
         folder_id = "1hSnG1XP-nsw1CbhLlHRo_PiiN45IHbXu"
         
-        # Karena gspread tidak support listing folder secara langsung,
-        # kita akan menggunakan workaround:
-        # 1. Gunakan Google Drive API via REST API sederhana
-        # 2. Atau gunakan spreadsheet ID yang sudah diketahui
+        # Cari file dengan kata "Stock" di dalam folder
+        query = f"'{folder_id}' in parents and (name contains 'Stock' or name contains 'stock') and trashed = false"
         
-        # SOLUSI: Coba beberapa approach
+        st.sidebar.info("🔍 Mencari file 'Stock' di Google Drive...")
         
-        # Approach 1: Jika ada spreadsheet ID di secrets
-        if "stock_spreadsheet_id" in st.secrets:
-            try:
-                spreadsheet_id = st.secrets["stock_spreadsheet_id"]
-                sh = client.open_by_key(spreadsheet_id)
-                worksheet = sh.get_worksheet(0)
-                data = worksheet.get_all_records()
-                df = pd.DataFrame(data)
-                st.sidebar.success(f"✅ Load dari spreadsheet ID di secrets")
-                return df
-            except Exception as e:
-                st.sidebar.warning(f"⚠️ Gagal load dari secrets: {str(e)}")
+        results = drive_service.files().list(
+            q=query,
+            fields="files(id, name, mimeType, createdTime)",
+            orderBy="createdTime desc"  # Ambil yang terbaru
+        ).execute()
         
-        # Approach 2: Coba akses spreadsheet yang berisi kata 'Stock' di nama
-        try:
-            # List semua spreadsheet yang bisa diakses
-            spreadsheet_list = []
-            
-            # Kita akan coba beberapa spreadsheet yang mungkin
-            possible_spreadsheets = [
-                "https://docs.google.com/spreadsheets/d/1HfC0mLgfSaRa64dd3II6HFY1gTTeVt9WBTBUC5nfwac/edit",
-                # Tambahkan URL spreadsheet lain jika perlu
-            ]
-            
-            for url in possible_spreadsheets:
-                try:
-                    sh = client.open_by_url(url)
-                    spreadsheet_title = sh.title
-                    
-                    # Cek apakah judul mengandung kata 'Stock'
-                    if 'stock' in spreadsheet_title.lower():
-                        st.sidebar.info(f"📁 Found spreadsheet: {spreadsheet_title}")
-                        worksheet = sh.get_worksheet(0)
-                        data = worksheet.get_all_records()
-                        df = pd.DataFrame(data)
-                        st.sidebar.success(f"✅ Load dari: {spreadsheet_title}")
-                        return df
-                except:
-                    continue
-            
-            # Jika tidak ada yang mengandung 'Stock', ambil spreadsheet pertama
-            if possible_spreadsheets:
-                try:
-                    sh = client.open_by_url(possible_spreadsheets[0])
-                    worksheet = sh.get_worksheet(0)
-                    data = worksheet.get_all_records()
-                    df = pd.DataFrame(data)
-                    st.sidebar.warning(f"⚠️ Menggunakan spreadsheet backup: {sh.title}")
-                    return df
-                except Exception as e:
-                    st.sidebar.error(f"❌ Error backup: {str(e)}")
-                    
-        except Exception as e:
-            st.sidebar.error(f"❌ Error mencari spreadsheet: {str(e)}")
-            
-        # Fallback: coba file dari URL lama
-        try:
-            spreadsheet_url = "https://docs.google.com/spreadsheets/d/1HfC0mLgfSaRa64dd3II6HFY1gTTeVt9WBTBUC5nfwac/edit?usp=sharing"
-            sh = client.open_by_url(spreadsheet_url)
+        files = results.get('files', [])
+        
+        if not files:
+            st.error("❌ Tidak ditemukan file dengan kata 'Stock' di folder tersebut!")
+            st.info(f"Folder ID: {folder_id}")
+            st.info("Pastikan:")
+            st.info("1. Service account punya akses ke folder")
+            st.info("2. File mengandung kata 'Stock' di nama file")
+            return pd.DataFrame()
+        
+        # Tampilkan file yang ditemukan
+        st.sidebar.success(f"✅ Ditemukan {len(files)} file dengan kata 'Stock'")
+        for file in files:
+            st.sidebar.info(f"📄 {file['name']} ({file['mimeType']})")
+        
+        # Ambil file terbaru (yang paling baru dibuat/diupdate)
+        latest_file = files[0]  # Karena sudah diurutkan desc by createdTime
+        file_id = latest_file['id']
+        file_name = latest_file['name']
+        mime_type = latest_file['mimeType']
+        
+        st.sidebar.success(f"📂 Menggunakan file terbaru: {file_name}")
+        
+        # Handle berdasarkan tipe file
+        if mime_type == 'application/vnd.google-apps.spreadsheet':
+            # Jika Google Sheets
+            st.sidebar.info("📊 Membaca Google Sheets...")
+            client = gspread.authorize(creds)
+            sh = client.open_by_key(file_id)
             worksheet = sh.get_worksheet(0)
             data = worksheet.get_all_records()
             df = pd.DataFrame(data)
-            st.sidebar.warning("⚠️ Menggunakan spreadsheet URL default")
-            return df
-        except Exception as e:
-            st.error(f"❌ Semua metode gagal: {str(e)}")
+            st.sidebar.success(f"✅ Berhasil load {len(df)} baris dari Google Sheets")
             
-        return pd.DataFrame()
+        elif mime_type in ['text/csv', 'application/vnd.ms-excel', 
+                          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet']:
+            # Jika file CSV atau Excel
+            st.sidebar.info("📊 Mendownload file CSV/Excel...")
+            request = drive_service.files().get_media(fileId=file_id)
+            file_bytes = io.BytesIO()
+            downloader = MediaIoBaseDownload(file_bytes, request)
+            done = False
+            while done is False:
+                status, done = downloader.next_chunk()
+            
+            file_bytes.seek(0)
+            
+            # Baca file berdasarkan tipe
+            if file_name.endswith('.csv'):
+                df = pd.read_csv(file_bytes)
+            else:  # Excel file
+                df = pd.read_excel(file_bytes)
+            
+            st.sidebar.success(f"✅ Berhasil load {len(df)} baris dari {file_name}")
+            
+        else:
+            st.error(f"❌ Format file tidak didukung: {mime_type}")
+            return pd.DataFrame()
+        
+        return df
             
     except Exception as e:
-        st.error(f"🔥 Koneksi Gagal: {str(e)}")
+        st.error(f"🔥 Error: {str(e)}")
         return pd.DataFrame()
 
 # --- 4. DATA PROCESSING ---
@@ -171,17 +171,8 @@ def process_data(df):
         st.warning("⚠️ Dataframe kosong")
         return df
     
-    # Tampilkan info kolom di sidebar
-    st.sidebar.info(f"📋 Kolom yang ditemukan ({len(df.columns)}):")
-    st.sidebar.write(list(df.columns))
-    
-    if len(df) > 0:
-        st.sidebar.info(f"📊 Sample data (baris pertama):")
-        sample_row = df.iloc[0].to_dict()
-        # Tampilkan hanya beberapa kolom pertama agar tidak terlalu panjang
-        for i, (key, value) in enumerate(sample_row.items()):
-            if i < 5:  # Tampilkan 5 kolom pertama saja
-                st.sidebar.write(f"  {key}: {value}")
+    # Tampilkan info kolom
+    st.sidebar.info(f"📋 Kolom yang ditemukan: {list(df.columns)}")
     
     # 1. Filter untuk Storage Location = F213
     if 'Storage Location' in df.columns:
@@ -196,6 +187,10 @@ def process_data(df):
                 df = df[df[location_col].astype(str) == 'F213'].copy()
                 st.sidebar.success(f"✅ Filtered F213 dari kolom {location_col}: {len(df)} rows")
     
+    if df.empty:
+        st.sidebar.warning("⚠️ Tidak ada data untuk F213")
+        return df
+    
     # 2. Convert Unrestricted to numeric
     if 'Unrestricted' in df.columns:
         df['Unrestricted'] = pd.to_numeric(df['Unrestricted'], errors='coerce').fillna(0)
@@ -203,10 +198,12 @@ def process_data(df):
         st.sidebar.success(f"✅ Total Stock: {total_stock:,.0f} unit")
     else:
         # Cari kolom stock alternatif
-        stock_cols = [col for col in df.columns if any(word in col.lower() for word in ['stock', 'qty', 'quantity', 'unrestricted'])]
+        stock_cols = [col for col in df.columns if any(word in col.lower() for word in ['stock', 'qty', 'quantity', 'unrestricted', 'sisa'])]
         if stock_cols:
             df['Unrestricted'] = pd.to_numeric(df[stock_cols[0]], errors='coerce').fillna(0)
             st.sidebar.warning(f"⚠️ Menggunakan kolom '{stock_cols[0]}' sebagai Unrestricted")
+            total_stock = df['Unrestricted'].sum()
+            st.sidebar.info(f"📦 Total Stock: {total_stock:,.0f} unit")
         else:
             st.sidebar.error("❌ Kolom stock tidak ditemukan!")
             df['Unrestricted'] = 0
@@ -216,7 +213,7 @@ def process_data(df):
         df['Remaining Expiry Date'] = pd.to_numeric(df['Remaining Expiry Date'], errors='coerce').fillna(0)
     else:
         # Cari kolom expiry alternatif
-        expiry_cols = [col for col in df.columns if any(word in col.lower() for word in ['expiry', 'remaining', 'shelf', 'day'])]
+        expiry_cols = [col for col in df.columns if any(word in col.lower() for word in ['expiry', 'remaining', 'shelf', 'day', 'hari'])]
         if expiry_cols:
             df['Remaining Expiry Date'] = pd.to_numeric(df[expiry_cols[0]], errors='coerce').fillna(0)
             st.sidebar.warning(f"⚠️ Menggunakan kolom '{expiry_cols[0]}' sebagai Expiry Date")
@@ -237,35 +234,45 @@ def process_data(df):
     df['Status'] = df['Remaining Expiry Date'].apply(get_status)
     df['Umur (Bulan)'] = (df['Remaining Expiry Date'] / 30).round(1)
     
-    # 5. Cek apakah kolom Material dan Description ada
+    # 5. Pastikan kolom Material ada
     if 'Material' not in df.columns:
         # Cari kolom material alternatif
         material_cols = [col for col in df.columns if any(word in col.lower() for word in ['material', 'sku', 'code', 'item'])]
         if material_cols:
-            df['Material'] = df[material_cols[0]]
+            df['Material'] = df[material_cols[0]].astype(str)
             st.sidebar.warning(f"⚠️ Menggunakan kolom '{material_cols[0]}' sebagai Material")
+        else:
+            # Jika tidak ada, buat dari index
+            df['Material'] = df.index.astype(str)
     
+    # 6. Pastikan kolom Material Description ada
     if 'Material Description' not in df.columns:
         # Cari kolom description alternatif
-        desc_cols = [col for col in df.columns if any(word in col.lower() for word in ['description', 'name', 'product'])]
+        desc_cols = [col for col in df.columns if any(word in col.lower() for word in ['description', 'name', 'product', 'item'])]
         if desc_cols:
-            df['Material Description'] = df[desc_cols[0]]
+            df['Material Description'] = df[desc_cols[0]].astype(str)
             st.sidebar.warning(f"⚠️ Menggunakan kolom '{desc_cols[0]}' sebagai Material Description")
+        else:
+            df['Material Description'] = df['Material']
     
-    # 6. Cek apakah kolom Product Hierarchy 2 ada
+    # 7. Pastikan kolom Product Hierarchy 2 ada
     if 'Product Hierarchy 2' not in df.columns:
         # Cari kolom brand alternatif
-        brand_cols = [col for col in df.columns if any(word in col.lower() for word in ['brand', 'hierarchy', 'product', 'category'])]
+        brand_cols = [col for col in df.columns if any(word in col.lower() for word in ['brand', 'hierarchy', 'product', 'category', 'type'])]
         if brand_cols:
-            df['Product Hierarchy 2'] = df[brand_cols[0]]
+            df['Product Hierarchy 2'] = df[brand_cols[0]].astype(str)
             st.sidebar.warning(f"⚠️ Menggunakan kolom '{brand_cols[0]}' sebagai Product Hierarchy 2")
+        else:
+            df['Product Hierarchy 2'] = "Unknown"
     
-    # 7. Cek apakah kolom Batch ada
+    # 8. Pastikan kolom Batch ada
     if 'Batch' not in df.columns:
         # Cari kolom batch alternatif
         batch_cols = [col for col in df.columns if any(word in col.lower() for word in ['batch', 'lot', 'serial'])]
         if batch_cols:
-            df['Batch'] = df[batch_cols[0]]
+            df['Batch'] = df[batch_cols[0]].astype(str)
+        else:
+            df['Batch'] = "N/A"
     
     return df
 
@@ -275,7 +282,7 @@ def main():
     c1, c2 = st.columns([3, 1])
     with c1:
         st.title("📦 F213 Inventory Command Center")
-        st.caption("Monitoring Real-time Stock Reseller & Expiry Health - Auto-detect from Drive")
+        st.caption("Monitoring Real-time Stock Reseller & Expiry Health - Auto-detect from Google Drive")
     with c2:
         if st.button("🔄 Refresh Live Data", type="primary", use_container_width=True):
             st.cache_data.clear()
@@ -283,15 +290,11 @@ def main():
         st.markdown(f"<div style='text-align: right; color: #6b7280; font-size: 12px;'>Last Sync: {datetime.now().strftime('%H:%M:%S')}</div>", unsafe_allow_html=True)
 
     # Load data
-    with st.spinner("🔄 Mencari file 'Stock' di Google Drive..."):
+    with st.spinner("🔍 Scanning Google Drive folder untuk file 'Stock'..."):
         raw_df = load_data()
     
     if raw_df.empty:
-        st.error("❌ Gagal memuat data. Periksa koneksi dan service account.")
-        st.info("**Tips:**")
-        st.info("1. Pastikan service account punya akses ke folder Google Drive")
-        st.info("2. Tambahkan spreadsheet ID di Streamlit Secrets dengan key 'stock_spreadsheet_id'")
-        st.info("3. Pastikan file mengandung kata 'Stock' di nama file")
+        st.error("❌ Gagal memuat data.")
         return
     
     # Process data
@@ -299,19 +302,20 @@ def main():
     
     if df.empty:
         st.warning("⚠️ Tidak ada data untuk F213 setelah filter")
-        # Tampilkan raw data untuk debugging
-        st.subheader("📋 Raw Data (10 baris pertama):")
-        st.dataframe(raw_df.head(10), use_container_width=True)
+        # Tampilkan sample raw data
+        if not raw_df.empty:
+            with st.expander("📋 Lihat raw data (10 baris pertama)"):
+                st.dataframe(raw_df.head(10), use_container_width=True)
         return
 
     st.markdown("---")
 
     # --- KPI CARDS ---
     total_qty = df['Unrestricted'].sum()
-    total_sku = df['Material'].nunique() if 'Material' in df.columns else len(df)
+    total_sku = df['Material'].nunique()
     
     critical_qty = df[df['Status'] == 'Critical']['Unrestricted'].sum()
-    critical_sku_count = df[df['Status'] == 'Critical']['Material'].nunique() if 'Material' in df.columns else len(df[df['Status'] == 'Critical'])
+    critical_sku_count = df[df['Status'] == 'Critical']['Material'].nunique()
     
     kpi1, kpi2, kpi3, kpi4 = st.columns(4)
     kpi1.metric("📦 Total Stock", f"{total_qty:,.0f}", delta="Unit")
@@ -424,45 +428,22 @@ def main():
         
         with col_search:
             # Buat search key
-            if 'Material' in temp_df.columns and 'Material Description' in temp_df.columns:
-                temp_df['Search_Key'] = temp_df['Material'].astype(str) + " | " + temp_df['Material Description'].astype(str)
-            elif 'Material' in temp_df.columns:
-                temp_df['Search_Key'] = temp_df['Material'].astype(str)
-            elif 'Material Description' in temp_df.columns:
-                temp_df['Search_Key'] = temp_df['Material Description'].astype(str)
-            else:
-                temp_df['Search_Key'] = temp_df.index.astype(str)
-            
+            temp_df['Search_Key'] = temp_df['Material'].astype(str) + " | " + temp_df['Material Description'].astype(str)
             search_list = sorted(temp_df['Search_Key'].unique().tolist())
             selected_item = st.selectbox("🔍 Cari SKU / Nama Produk:", search_list)
 
         if selected_item:
             # Parse selected item
-            if " | " in selected_item:
-                sel_code = selected_item.split(" | ")[0]
-            else:
-                sel_code = selected_item
+            sel_code = selected_item.split(" | ")[0]
             
             # Cari data
-            if 'Material' in df.columns:
-                item_data = df[df['Material'].astype(str) == sel_code]
-            elif 'Search_Key' in temp_df.columns:
-                item_data = temp_df[temp_df['Search_Key'] == selected_item]
-            else:
-                item_data = pd.DataFrame()
+            item_data = df[df['Material'].astype(str) == sel_code]
             
             if not item_data.empty:
                 with st.container():
                     # Tampilkan header
-                    if 'Material Description' in item_data.columns:
-                        desc = item_data['Material Description'].iloc[0]
-                    else:
-                        desc = "N/A"
-                    
-                    if 'Product Hierarchy 2' in item_data.columns:
-                        brand = item_data['Product Hierarchy 2'].iloc[0]
-                    else:
-                        brand = "N/A"
+                    desc = item_data['Material Description'].iloc[0]
+                    brand = item_data['Product Hierarchy 2'].iloc[0]
                     
                     st.markdown(f"""
                     <div style='background-color: white; padding: 20px; border-radius: 10px; border: 1px solid #e0e0e0; margin-bottom: 20px;'>
@@ -485,7 +466,7 @@ def main():
                     
                     # Tampilkan kolom yang tersedia
                     display_cols = []
-                    for col in ['Batch', 'Unrestricted', 'Umur (Bulan)', 'Status', 'Remaining Expiry Date']:
+                    for col in ['Batch', 'Unrestricted', 'Umur (Bulan)', 'Status']:
                         if col in item_data.columns:
                             display_cols.append(col)
                     
