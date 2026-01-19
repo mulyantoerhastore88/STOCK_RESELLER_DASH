@@ -326,7 +326,7 @@ def main():
     st.markdown("<br>", unsafe_allow_html=True)
 
     # --- TABS ---
-    tab1, tab2 = st.tabs(["📊 EXECUTIVE SUMMARY", "🔎 SKU INSPECTOR"])
+    tab1, tab2, tab3 = st.tabs(["📊 EXECUTIVE SUMMARY", "🔎 SKU INSPECTOR", "📋 BATCH INVENTORY"])
 
     # === TAB 1: VISUALISASI ===
     with tab1:
@@ -493,6 +493,136 @@ def main():
                         st.dataframe(item_data, use_container_width=True, hide_index=True)
             else:
                 st.warning("Data tidak ditemukan")
+
+    # === TAB 3: BATCH INVENTORY ===
+    with tab3:
+        st.subheader("📋 Inventory per SKU dengan Detail Batch")
+        
+        # Group data by Material (SKU) and aggregate
+        if not df.empty:
+            # Get unique SKUs with multiple batches
+            sku_batch_counts = df.groupby('Material').agg({
+                'Material Description': 'first',
+                'Product Hierarchy 2': 'first',
+                'Batch': 'count',
+                'Unrestricted': 'sum',
+                'Umur (Bulan)': ['min', 'max'],
+                'Status': lambda x: x.mode()[0] if len(x.mode()) > 0 else 'Unknown'
+            }).reset_index()
+            
+            # Flatten column names
+            sku_batch_counts.columns = [
+                'SKU', 'Description', 'Brand', 'Batch Count', 
+                'Total Qty', 'Min Expiry', 'Max Expiry', 'Status'
+            ]
+            
+            # Filter SKUs with multiple batches
+            multi_batch_skus = sku_batch_counts[sku_batch_counts['Batch Count'] > 1]
+            
+            st.info(f"🔍 Ditemukan {len(multi_batch_skus)} SKU dengan multiple batch")
+            
+            if not multi_batch_skus.empty:
+                # Display summary table
+                st.dataframe(
+                    multi_batch_skus.sort_values('Total Qty', ascending=False),
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Batch Count": st.column_config.NumberColumn(
+                            "Jumlah Batch",
+                            help="Total batch yang berbeda"
+                        ),
+                        "Total Qty": st.column_config.NumberColumn(
+                            "Total Stock",
+                            format="%d Pcs"
+                        ),
+                        "Min Expiry": st.column_config.NumberColumn(
+                            "Exp. Terdekat (Bln)",
+                            format="%.1f Bln"
+                        ),
+                        "Max Expiry": st.column_config.NumberColumn(
+                            "Exp. Terjauh (Bln)",
+                            format="%.1f Bln"
+                        )
+                    }
+                )
+                
+                # Select a SKU to see batch details
+                st.markdown("---")
+                st.subheader("🔍 Detail Batch per SKU")
+                
+                selected_sku = st.selectbox(
+                    "Pilih SKU untuk melihat detail batch:",
+                    options=multi_batch_skus['SKU'].tolist(),
+                    format_func=lambda x: f"{x} - {multi_batch_skus[multi_batch_skus['SKU']==x]['Description'].iloc[0]} ({multi_batch_skus[multi_batch_skus['SKU']==x]['Batch Count'].iloc[0]} batch)"
+                )
+                
+                if selected_sku:
+                    sku_batches = df[df['Material'] == selected_sku]
+                    
+                    # Display batch details
+                    st.markdown(f"#### 📦 SKU: {selected_sku}")
+                    
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Total Stock", f"{sku_batches['Unrestricted'].sum():,.0f} pcs")
+                    with col2:
+                        st.metric("Jumlah Batch", len(sku_batches))
+                    with col3:
+                        status_counts = sku_batches['Status'].value_counts()
+                        main_status = status_counts.index[0] if len(status_counts) > 0 else 'Unknown'
+                        st.metric("Status Dominan", main_status)
+                    
+                    # Batch details table
+                    st.markdown("##### Detail Batch:")
+                    batch_detail = sku_batches[['Batch', 'Unrestricted', 'Umur (Bulan)', 'Status']].sort_values('Umur (Bulan)')
+                    
+                    # Add percentage column
+                    total_qty = batch_detail['Unrestricted'].sum()
+                    batch_detail['Percentage'] = (batch_detail['Unrestricted'] / total_qty * 100).round(1)
+                    
+                    st.dataframe(
+                        batch_detail,
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "Unrestricted": st.column_config.NumberColumn(
+                                "Quantity",
+                                format="%d Pcs"
+                            ),
+                            "Umur (Bulan)": st.column_config.ProgressColumn(
+                                "Sisa Umur",
+                                format="%.1f Bln",
+                                min_value=0,
+                                max_value=36,
+                            ),
+                            "Percentage": st.column_config.ProgressColumn(
+                                "Persentase",
+                                format="%.1f%%",
+                                min_value=0,
+                                max_value=100,
+                            )
+                        }
+                    )
+                    
+                    # Visual chart
+                    fig = px.pie(
+                        batch_detail, 
+                        values='Unrestricted', 
+                        names='Batch',
+                        title=f"Distribusi Quantity per Batch - SKU {selected_sku}",
+                        color_discrete_sequence=px.colors.qualitative.Set3
+                    )
+                    fig.update_layout(
+                        plot_bgcolor="rgba(0,0,0,0)",
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        font=dict(color="#1f2937")
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.success("✅ Semua SKU hanya memiliki 1 batch (tidak ada multiple batch)")
+        else:
+            st.warning("Tidak ada data untuk ditampilkan.")
 
 if __name__ == "__main__":
     main()
