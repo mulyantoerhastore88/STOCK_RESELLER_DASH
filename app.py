@@ -787,12 +787,11 @@ def main():
                         so_df = pd.read_excel(uploaded_file)
                     
                     st.success(f"✅ File berhasil diupload: {uploaded_file.name}")
-                    st.info(f"📊 Data SO: {len(so_df)} baris, {len(so_df.columns)} kolom")
+                    st.info(f"📊 Data SO: {len(so_df)} baris")
                     
-                    # Show preview of uploaded data
+                    # Show preview
                     with st.expander("🔍 Preview Data SO"):
                         st.dataframe(so_df.head(), use_container_width=True)
-                        st.write("Kolom yang ditemukan:", list(so_df.columns))
                     
                     # Settings
                     col1, col2 = st.columns(2)
@@ -824,92 +823,59 @@ def main():
                                 stock_for_allocation = stock_for_allocation.sort_values(['Material', 'Umur (Bulan)'], ascending=[True, True])
                             else:
                                 stock_for_allocation = stock_for_allocation.sort_values(['Material', 'Umur (Bulan)'], ascending=[True, False])
-                                
-                            # PROCESSING LOGIC - FIXED VERSION
+                            
+                            # PROCESSING LOGIC - CLEAN VERSION
                             results = []
                             
-                                                        
-                            # Find the correct columns - EXACT MATCH FIRST
-                            material_col = None
-                            material_desc_col = None
-                            qty_col = None
+                            # Find columns
+                            material_col = 'Material' if 'Material' in so_df.columns else None
+                            material_desc_col = 'Material Description' if 'Material Description' in so_df.columns else None
+                            qty_col = 'Order Quantity (Item)' if 'Order Quantity (Item)' in so_df.columns else None
                             
-                            # First try exact matches
-                            for col in so_df.columns:
-                                col_str = str(col)
-                                if col_str == 'Material':
-                                    material_col = col
-                                elif col_str == 'Material Description':
-                                    material_desc_col = col
-                                elif col_str == 'Order Quantity (Item)':
-                                    qty_col = col
-                            
-                            # If not found, try case-insensitive
+                            # Fallback for column names
                             if not material_col:
                                 for col in so_df.columns:
-                                    col_lower = str(col).lower()
-                                    if 'material' in col_lower and 'description' not in col_lower:
+                                    if 'material' in str(col).lower() and 'description' not in str(col).lower():
                                         material_col = col
-                                        break
-                            
-                            if not material_desc_col:
-                                for col in so_df.columns:
-                                    col_lower = str(col).lower()
-                                    if 'material' in col_lower and 'description' in col_lower:
-                                        material_desc_col = col
                                         break
                             
                             if not qty_col:
                                 for col in so_df.columns:
-                                    col_lower = str(col).lower()
-                                    if 'quantity' in col_lower and 'item' in col_lower:
+                                    if 'quantity' in str(col).lower():
                                         qty_col = col
                                         break
-                                if not qty_col:
-                                    for col in so_df.columns:
-                                        col_lower = str(col).lower()
-                                        if 'quantity' in col_lower:
-                                            qty_col = col
-                                            break
-                            
                             
                             if not material_col or not qty_col:
                                 st.error("❌ Kolom 'Material' dan 'Quantity' tidak ditemukan!")
                                 st.stop()
                             
-                            
                             # Process each SO line
-                            processed_count = 0
-                            matched_count = 0
-                            
                             for idx, row in so_df.iterrows():
-                                # Get material code (not description!)
-                                material_code = str(row[material_col]).strip()
+                                # Get material code
+                                material_code = str(row[material_col]).strip() if pd.notna(row[material_col]) else ''
                                 
                                 # Skip empty material codes
                                 if not material_code or material_code.lower() in ['nan', 'null', '']:
                                     continue
                                 
+                                # Get quantity
                                 try:
-                                    order_qty = float(row[qty_col])
+                                    order_qty = float(row[qty_col]) if pd.notna(row[qty_col]) else 0
                                 except:
                                     order_qty = 0
                                 
                                 if order_qty <= 0:
                                     continue
                                 
-                                processed_count += 1
-                                
-                                # Get material description if available
+                                # Get material description
                                 material_desc = ''
                                 if material_desc_col and material_desc_col in row:
-                                    material_desc = str(row[material_desc_col]) if pd.notna(row[material_desc_col]) else ''
+                                    material_desc = str(row[material_desc_col]) if pd.notna(row[material_desc_col]) else material_code
                                 
-                                # Get stock for this material - EXACT MATCH
+                                # Get stock for this material
                                 material_stock = stock_for_allocation[
                                     stock_for_allocation['Material'].astype(str).str.strip() == material_code
                                 ].copy()
-                                
                                 
                                 # Create result row
                                 result_row = {}
@@ -924,30 +890,15 @@ def main():
                                 result_row['Order Quantity'] = order_qty
                                 
                                 if material_stock.empty:
-                                    # Try fuzzy match if exact match fails
-                                    # Check if maybe there are extra spaces or formatting issues
-                                    stock_materials = stock_for_allocation['Material'].astype(str).str.strip().unique()
-                                    fuzzy_matches = [m for m in stock_materials if material_code in m or m in material_code]
-                                    
-                                    if fuzzy_matches:
-                                        st.warning(f"⚠️ Material '{material_code}' tidak ditemukan exact match, tapi ada fuzzy matches: {fuzzy_matches}")
-                                        # Try the first fuzzy match
-                                        material_stock = stock_for_allocation[
-                                            stock_for_allocation['Material'].astype(str).str.strip() == fuzzy_matches[0]
-                                        ].copy()
-                                
-                                if material_stock.empty:
                                     result_row['Assigned Batch'] = 'NO STOCK'
                                     result_row['Status'] = 'NO STOCK'
                                     result_row['Assigned Qty'] = 0
                                     result_row['Remaining Qty'] = order_qty
-                                    result_row['Note'] = f"Material '{material_code}' tidak ditemukan di stock F213"
                                 elif material_stock['Unrestricted'].sum() == 0:
                                     result_row['Assigned Batch'] = 'OUT OF STOCK'
                                     result_row['Status'] = 'OUT OF STOCK'
                                     result_row['Assigned Qty'] = 0
                                     result_row['Remaining Qty'] = order_qty
-                                    result_row['Note'] = f"Material '{material_code}' ada tapi stock 0"
                                 else:
                                     # Assign batches
                                     remaining_qty = order_qty
@@ -972,24 +923,19 @@ def main():
                                     
                                     if batches:
                                         batch_str = ", ".join(batches)
-                                        batch_detail_str = ", ".join(batch_details)
                                         assigned_qty = order_qty - remaining_qty
                                         
                                         result_row['Assigned Batch'] = batch_str
-                                        result_row['Batch Details'] = batch_detail_str
                                         result_row['Assigned Qty'] = assigned_qty
                                         result_row['Remaining Qty'] = remaining_qty
                                         result_row['Status'] = 'FULLFILLED' if remaining_qty == 0 else 'PARTIAL'
-                                        result_row['Note'] = ''
                                     else:
                                         result_row['Assigned Batch'] = 'NO BATCH'
                                         result_row['Status'] = 'ERROR'
                                         result_row['Assigned Qty'] = 0
                                         result_row['Remaining Qty'] = order_qty
-                                        result_row['Note'] = f"Material '{material_code}' ada tapi tidak ada batch valid"
                                 
                                 results.append(result_row)
-                            
                             
                             # Create results dataframe
                             result_df = pd.DataFrame(results)
@@ -1017,7 +963,7 @@ def main():
                                 display_cols = []
                                 if 'Sales Document' in result_df.columns:
                                     display_cols.append('Sales Document')
-                                display_cols.extend(['Material', 'Order Quantity', 'Assigned Batch', 'Status'])
+                                display_cols.extend(['Material', 'Material Description', 'Order Quantity', 'Assigned Batch', 'Status'])
                                 
                                 display_df = result_df[display_cols].copy()
                                 
@@ -1126,37 +1072,9 @@ def main():
                             
                 except Exception as e:
                     st.error(f"❌ Error: {str(e)}")
-                    import traceback
-                    with st.expander("Detail Error"):
-                        st.code(traceback.format_exc())
             else:
                 # No file uploaded
                 st.info("📁 Upload file Sales Order untuk memulai")
-                
-                # Show sample format
-                sample_data = {
-                    'Sales Organization': ['ID01', 'ID01'],
-                    'Delivery Date': ['2024-03-15', '2024-03-16'],
-                    'Sales Document': ['SO001', 'SO002'],
-                    'Material': ['SKU001', 'SKU002'],
-                    'Material Description': ['Product A', 'Product B'],
-                    'Order Quantity (Item)': [100, 50]
-                }
-                
-                sample_df = pd.DataFrame(sample_data)
-                
-                with st.expander("📋 Contoh Format File"):
-                    st.dataframe(sample_df, use_container_width=True)
-                    
-                    # Download template
-                    csv = sample_df.to_csv(index=False)
-                    st.download_button(
-                        "Download Template (CSV)",
-                        data=csv,
-                        file_name="SO_Template.csv",
-                        mime="text/csv",
-                        use_container_width=True
-                    )
 
 if __name__ == "__main__":
     main()
