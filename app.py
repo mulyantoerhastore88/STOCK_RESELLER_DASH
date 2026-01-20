@@ -824,32 +824,85 @@ def main():
                                 stock_for_allocation = stock_for_allocation.sort_values(['Material', 'Umur (Bulan)'], ascending=[True, True])
                             else:
                                 stock_for_allocation = stock_for_allocation.sort_values(['Material', 'Umur (Bulan)'], ascending=[True, False])
-                            
-                            # PROCESSING LOGIC
+                                
+                            # PROCESSING LOGIC - FIXED VERSION
                             results = []
                             
-                            # Find material and quantity columns
+                            # Debug: Tampilkan kolom yang ada di SO
+                            st.info(f"🔍 Kolom di file SO: {list(so_df.columns)}")
+                            
+                            # Find the correct columns - EXACT MATCH FIRST
                             material_col = None
+                            material_desc_col = None
                             qty_col = None
                             
+                            # First try exact matches
                             for col in so_df.columns:
-                                col_lower = str(col).lower()
-                                if 'material' in col_lower:
+                                col_str = str(col)
+                                if col_str == 'Material':
                                     material_col = col
-                                elif 'quantity' in col_lower and 'item' in col_lower:
+                                elif col_str == 'Material Description':
+                                    material_desc_col = col
+                                elif col_str == 'Order Quantity (Item)':
                                     qty_col = col
-                                elif 'quantity' in col_lower and not qty_col:
-                                    qty_col = col
+                            
+                            # If not found, try case-insensitive
+                            if not material_col:
+                                for col in so_df.columns:
+                                    col_lower = str(col).lower()
+                                    if 'material' in col_lower and 'description' not in col_lower:
+                                        material_col = col
+                                        break
+                            
+                            if not material_desc_col:
+                                for col in so_df.columns:
+                                    col_lower = str(col).lower()
+                                    if 'material' in col_lower and 'description' in col_lower:
+                                        material_desc_col = col
+                                        break
+                            
+                            if not qty_col:
+                                for col in so_df.columns:
+                                    col_lower = str(col).lower()
+                                    if 'quantity' in col_lower and 'item' in col_lower:
+                                        qty_col = col
+                                        break
+                                if not qty_col:
+                                    for col in so_df.columns:
+                                        col_lower = str(col).lower()
+                                        if 'quantity' in col_lower:
+                                            qty_col = col
+                                            break
+                            
+                            st.info(f"✅ Mapping kolom:")
+                            st.info(f"- Material: '{material_col}'")
+                            st.info(f"- Material Description: '{material_desc_col}'")
+                            st.info(f"- Order Quantity: '{qty_col}'")
                             
                             if not material_col or not qty_col:
                                 st.error("❌ Kolom 'Material' dan 'Quantity' tidak ditemukan!")
                                 st.stop()
                             
-                            st.info(f"✅ Menggunakan kolom: '{material_col}' sebagai Material, '{qty_col}' sebagai Quantity")
+                            # Show sample of material codes from SO
+                            st.info("🔍 Sample Material dari SO:")
+                            st.write(so_df[[material_col, material_desc_col if material_desc_col else material_col]].head(10))
+                            
+                            # Show sample of material codes from Stock
+                            st.info("🔍 Sample Material dari Stock F213:")
+                            st.write(df[['Material', 'Material Description']].head(10))
                             
                             # Process each SO line
+                            processed_count = 0
+                            matched_count = 0
+                            
                             for idx, row in so_df.iterrows():
-                                material = str(row[material_col]).strip()
+                                # Get material code (not description!)
+                                material_code = str(row[material_col]).strip()
+                                
+                                # Skip empty material codes
+                                if not material_code or material_code.lower() in ['nan', 'null', '']:
+                                    continue
+                                
                                 try:
                                     order_qty = float(row[qty_col])
                                 except:
@@ -858,36 +911,68 @@ def main():
                                 if order_qty <= 0:
                                     continue
                                 
-                                # Get stock for this material
+                                processed_count += 1
+                                
+                                # Get material description if available
+                                material_desc = ''
+                                if material_desc_col and material_desc_col in row:
+                                    material_desc = str(row[material_desc_col]) if pd.notna(row[material_desc_col]) else ''
+                                
+                                # Get stock for this material - EXACT MATCH
                                 material_stock = stock_for_allocation[
-                                    stock_for_allocation['Material'].astype(str).str.strip() == material
+                                    stock_for_allocation['Material'].astype(str).str.strip() == material_code
                                 ].copy()
+                                
+                                # DEBUG: Show matching attempt
+                                if idx < 5:  # Show first 5 for debugging
+                                    st.write(f"DEBUG - SO Material: '{material_code}'")
+                                    st.write(f"DEBUG - Stock matches: {len(material_stock)} rows")
+                                    if not material_stock.empty:
+                                        st.write(f"DEBUG - Stock Material: {material_stock['Material'].iloc[0]}")
+                                        matched_count += 1
                                 
                                 # Create result row
                                 result_row = {}
                                 
                                 # Add original data
-                                for col in ['Sales Organization', 'Delivery Date', 'Sales Document', 'Material Description']:
-                                    if col in so_df.columns:
+                                for col in ['Sales Organization', 'Delivery Date', 'Sales Document']:
+                                    if col in so_df.columns and col in row:
                                         result_row[col] = row[col] if pd.notna(row[col]) else ''
                                 
-                                result_row['Material'] = material
+                                result_row['Material'] = material_code
+                                result_row['Material Description'] = material_desc
                                 result_row['Order Quantity'] = order_qty
+                                
+                                if material_stock.empty:
+                                    # Try fuzzy match if exact match fails
+                                    # Check if maybe there are extra spaces or formatting issues
+                                    stock_materials = stock_for_allocation['Material'].astype(str).str.strip().unique()
+                                    fuzzy_matches = [m for m in stock_materials if material_code in m or m in material_code]
+                                    
+                                    if fuzzy_matches:
+                                        st.warning(f"⚠️ Material '{material_code}' tidak ditemukan exact match, tapi ada fuzzy matches: {fuzzy_matches}")
+                                        # Try the first fuzzy match
+                                        material_stock = stock_for_allocation[
+                                            stock_for_allocation['Material'].astype(str).str.strip() == fuzzy_matches[0]
+                                        ].copy()
                                 
                                 if material_stock.empty:
                                     result_row['Assigned Batch'] = 'NO STOCK'
                                     result_row['Status'] = 'NO STOCK'
                                     result_row['Assigned Qty'] = 0
                                     result_row['Remaining Qty'] = order_qty
+                                    result_row['Note'] = f"Material '{material_code}' tidak ditemukan di stock F213"
                                 elif material_stock['Unrestricted'].sum() == 0:
                                     result_row['Assigned Batch'] = 'OUT OF STOCK'
                                     result_row['Status'] = 'OUT OF STOCK'
                                     result_row['Assigned Qty'] = 0
                                     result_row['Remaining Qty'] = order_qty
+                                    result_row['Note'] = f"Material '{material_code}' ada tapi stock 0"
                                 else:
                                     # Assign batches
                                     remaining_qty = order_qty
                                     batches = []
+                                    batch_details = []
                                     
                                     for _, stock_row in material_stock.iterrows():
                                         if remaining_qty <= 0:
@@ -900,25 +985,37 @@ def main():
                                         assign_qty = min(available_qty, remaining_qty)
                                         batch_num = str(stock_row['Batch']).strip()
                                         
-                                        if batch_num and batch_num != 'nan' and batch_num != 'N/A':
-                                            batches.append(f"{batch_num}")
+                                        if batch_num and batch_num.lower() not in ['nan', 'n/a', '']:
+                                            batches.append(batch_num)
+                                            batch_details.append(f"{batch_num} ({assign_qty}pcs)")
                                             remaining_qty -= assign_qty
                                     
                                     if batches:
                                         batch_str = ", ".join(batches)
+                                        batch_detail_str = ", ".join(batch_details)
                                         assigned_qty = order_qty - remaining_qty
                                         
                                         result_row['Assigned Batch'] = batch_str
+                                        result_row['Batch Details'] = batch_detail_str
                                         result_row['Assigned Qty'] = assigned_qty
                                         result_row['Remaining Qty'] = remaining_qty
                                         result_row['Status'] = 'FULLFILLED' if remaining_qty == 0 else 'PARTIAL'
+                                        result_row['Note'] = ''
                                     else:
                                         result_row['Assigned Batch'] = 'NO BATCH'
                                         result_row['Status'] = 'ERROR'
                                         result_row['Assigned Qty'] = 0
                                         result_row['Remaining Qty'] = order_qty
+                                        result_row['Note'] = f"Material '{material_code}' ada tapi tidak ada batch valid"
                                 
                                 results.append(result_row)
+                            
+                            # Show matching statistics
+                            st.info(f"📊 Statistik Matching:")
+                            st.info(f"- Total SO lines diproses: {processed_count}")
+                            if processed_count > 0:
+                                match_rate = (matched_count / min(processed_count, 5)) * 100
+                                st.info(f"- Sample match rate (5 pertama): {match_rate:.1f}%")
                             
                             # Create results dataframe
                             result_df = pd.DataFrame(results)
