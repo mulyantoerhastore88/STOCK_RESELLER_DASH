@@ -828,9 +828,7 @@ def main():
                             # PROCESSING LOGIC - FIXED VERSION
                             results = []
                             
-                            # Debug: Tampilkan kolom yang ada di SO
-                            st.info(f"🔍 Kolom di file SO: {list(so_df.columns)}")
-                            
+                                                        
                             # Find the correct columns - EXACT MATCH FIRST
                             material_col = None
                             material_desc_col = None
@@ -874,22 +872,11 @@ def main():
                                             qty_col = col
                                             break
                             
-                            st.info(f"✅ Mapping kolom:")
-                            st.info(f"- Material: '{material_col}'")
-                            st.info(f"- Material Description: '{material_desc_col}'")
-                            st.info(f"- Order Quantity: '{qty_col}'")
                             
                             if not material_col or not qty_col:
                                 st.error("❌ Kolom 'Material' dan 'Quantity' tidak ditemukan!")
                                 st.stop()
                             
-                            # Show sample of material codes from SO
-                            st.info("🔍 Sample Material dari SO:")
-                            st.write(so_df[[material_col, material_desc_col if material_desc_col else material_col]].head(10))
-                            
-                            # Show sample of material codes from Stock
-                            st.info("🔍 Sample Material dari Stock F213:")
-                            st.write(df[['Material', 'Material Description']].head(10))
                             
                             # Process each SO line
                             processed_count = 0
@@ -923,13 +910,6 @@ def main():
                                     stock_for_allocation['Material'].astype(str).str.strip() == material_code
                                 ].copy()
                                 
-                                # DEBUG: Show matching attempt
-                                if idx < 5:  # Show first 5 for debugging
-                                    st.write(f"DEBUG - SO Material: '{material_code}'")
-                                    st.write(f"DEBUG - Stock matches: {len(material_stock)} rows")
-                                    if not material_stock.empty:
-                                        st.write(f"DEBUG - Stock Material: {material_stock['Material'].iloc[0]}")
-                                        matched_count += 1
                                 
                                 # Create result row
                                 result_row = {}
@@ -1010,12 +990,6 @@ def main():
                                 
                                 results.append(result_row)
                             
-                            # Show matching statistics
-                            st.info(f"📊 Statistik Matching:")
-                            st.info(f"- Total SO lines diproses: {processed_count}")
-                            if processed_count > 0:
-                                match_rate = (matched_count / min(processed_count, 5)) * 100
-                                st.info(f"- Sample match rate (5 pertama): {match_rate:.1f}%")
                             
                             # Create results dataframe
                             result_df = pd.DataFrame(results)
