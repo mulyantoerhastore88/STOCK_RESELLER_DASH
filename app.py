@@ -448,6 +448,63 @@ def main():
                 st.dataframe(raw_df.head(10), use_container_width=True)
         return
 
+    # Load data
+    with st.spinner("🔍 Scanning Google Drive folder untuk file 'Stock'..."):
+        raw_df = load_data()
+    
+    if raw_df.empty:
+        st.error("❌ Gagal memuat data.")
+        return
+    
+    # Process data
+    df = process_data(raw_df)
+    
+    # === TAMBAHKAN DI SINI: DOWNLOAD BUTTON DI SIDEBAR ===
+    with st.sidebar:
+        st.markdown("---")
+        st.subheader("📥 Download Data")
+        
+        if not df.empty:
+            # Download processed data
+            csv_data = df.to_csv(index=False)
+            
+            st.download_button(
+                label="📄 Download Stock Data (CSV)",
+                data=csv_data,
+                file_name=f"F213_Stock_Data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv",
+                help="Download semua data stock F213 dengan informasi status",
+                use_container_width=True,
+                type="secondary"
+            )
+            
+            # Info about the data
+            st.caption(f"📊 {len(df)} rows, {len(df.columns)} columns")
+            
+            # Optional: Create summary version
+            if st.checkbox("📋 Download summary version", value=True):
+                summary_cols = []
+                for col in ['Material', 'Material Description', 'Product Hierarchy 2', 
+                           'Batch', 'Unrestricted', 'Umur (Bulan)', 'Status']:
+                    if col in df.columns:
+                        summary_cols.append(col)
+                
+                if summary_cols:
+                    summary_df = df[summary_cols].copy()
+                    csv_summary = summary_df.to_csv(index=False)
+                    
+                    st.download_button(
+                        label="📋 Download Summary Data",
+                        data=csv_summary,
+                        file_name=f"F213_Stock_Summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        mime="text/csv",
+                        help="Download data ringkasan (kolom penting saja)",
+                        use_container_width=True
+                    )
+        else:
+            st.info("Data tidak tersedia untuk download")
+
+    
     st.markdown("---")
 
     # --- KPI CARDS ---
