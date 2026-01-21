@@ -66,6 +66,23 @@ st.markdown("""
         color: #000000 !important;
         font-weight: bold;
     }
+
+    /* 6. Tombol Download di Sidebar */
+    section[data-testid="stSidebar"] .stDownloadButton button {
+        background-color: #10b981 !important;
+        color: white !important;
+        border: 1px solid #059669 !important;
+    }
+    
+    section[data-testid="stSidebar"] .stDownloadButton button:hover {
+        background-color: #059669 !important;
+        border-color: #047857 !important;
+    }
+    
+    section[data-testid="stSidebar"] .stDownloadButton button:active {
+        background-color: #047857 !important;
+    }
+    
 </style>
 """, unsafe_allow_html=True)
 
