@@ -540,7 +540,7 @@ def main():
     st.markdown("<br>", unsafe_allow_html=True)
 
     # --- TABS ---
-    tab1, tab2, tab3, tab4 = st.tabs(["📊 EXECUTIVE SUMMARY", "🔎 SKU INSPECTOR", "📋 BATCH INVENTORY", "📄 SALES ORDER PROCESSING"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📊 EXECUTIVE SUMMARY", "🔎 SKU INSPECTOR", "📋 BATCH INVENTORY", "📄 Sales Order Checking"])
 
     # === TAB 1: VISUALISASI ===
     with tab1:
@@ -839,9 +839,9 @@ def main():
         else:
             st.warning("Tidak ada data untuk ditampilkan.")
 
-        # === TAB 4: SALES ORDER PROCESSING ===
+        # === TAB 4: Sales Order Checking ===
         with tab4:
-            st.subheader("📄 Sales Order Processing")
+            st.subheader("📄 Sales Order Checking")
             st.markdown("Upload file Sales Order (Excel/CSV) untuk assign batch secara otomatis")
             
             # File uploader
