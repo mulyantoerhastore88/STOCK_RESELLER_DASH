@@ -8,8 +8,6 @@ import io
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime
-import tempfile
-import os
 
 # --- 1. PAGE CONFIGURATION ---
 st.set_page_config(
@@ -83,6 +81,11 @@ st.markdown("""
         background-color: #047857 !important;
     }
     
+    /* 7. Additional styling for Sales Order Tab */
+    .sales-order-metric {
+        background-color: #f0f9ff !important;
+        border-left: 4px solid #3b82f6 !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -182,6 +185,92 @@ def load_data():
             
     except Exception as e:
         st.error(f"🔥 Error: {str(e)}")
+        return pd.DataFrame()
+
+# --- 3B. DATA LOADER UNTUK SALES ORDER (SO RSLR) ---
+@st.cache_data(ttl=300)
+def load_sales_order_data():
+    try:
+        scope = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive.readonly"
+        ]
+        
+        if "gcp_service_account" not in st.secrets:
+            st.error("❌ Secrets 'gcp_service_account' belum di-set!")
+            return pd.DataFrame()
+
+        creds_dict = st.secrets["gcp_service_account"]
+        creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
+        
+        # Inisialisasi Google Drive API
+        drive_service = build('drive', 'v3', credentials=creds)
+        
+        # Folder ID dari URL: https://drive.google.com/drive/folders/1hSnG1XP-nsw1CbhLlHRo_PiiN45IHbXu
+        folder_id = "1hSnG1XP-nsw1CbhLlHRo_PiiN45IHbXu"
+        
+        # Cari file dengan kata "SO RSLR" di dalam folder
+        query = f"'{folder_id}' in parents and (name contains 'SO RSLR' or name contains 'so rslr') and trashed = false"
+        
+        st.sidebar.info("🔍 Mencari file 'SO RSLR' di Google Drive...")
+        
+        results = drive_service.files().list(
+            q=query,
+            fields="files(id, name, mimeType, createdTime)",
+            orderBy="createdTime desc"  # Ambil yang terbaru
+        ).execute()
+        
+        files = results.get('files', [])
+        
+        if not files:
+            st.sidebar.warning("⚠️ Tidak ditemukan file dengan kata 'SO RSLR' di folder tersebut!")
+            return pd.DataFrame()
+        
+        # Tampilkan file yang ditemukan
+        st.sidebar.success(f"✅ Ditemukan {len(files)} file dengan kata 'SO RSLR'")
+        latest_file = files[0]  # Ambil yang terbaru
+        file_id = latest_file['id']
+        file_name = latest_file['name']
+        mime_type = latest_file['mimeType']
+        
+        st.sidebar.success(f"📂 Menggunakan file: {file_name}")
+        
+        # Handle berdasarkan tipe file
+        if mime_type == 'application/vnd.google-apps.spreadsheet':
+            # Jika Google Sheets
+            client = gspread.authorize(creds)
+            sh = client.open_by_key(file_id)
+            worksheet = sh.get_worksheet(0)
+            data = worksheet.get_all_records()
+            df = pd.DataFrame(data)
+            
+        elif mime_type in ['text/csv', 'application/vnd.ms-excel', 
+                          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet']:
+            # Jika file CSV atau Excel
+            request = drive_service.files().get_media(fileId=file_id)
+            file_bytes = io.BytesIO()
+            downloader = MediaIoBaseDownload(file_bytes, request)
+            done = False
+            while done is False:
+                status, done = downloader.next_chunk()
+            
+            file_bytes.seek(0)
+            
+            # Baca file berdasarkan tipe
+            if file_name.endswith('.csv'):
+                df = pd.read_csv(file_bytes)
+            else:  # Excel file
+                df = pd.read_excel(file_bytes)
+            
+        else:
+            st.sidebar.error(f"❌ Format file tidak didukung: {mime_type}")
+            return pd.DataFrame()
+        
+        st.sidebar.success(f"✅ Berhasil load {len(df)} baris Sales Order")
+        return df
+            
+    except Exception as e:
+        st.sidebar.error(f"🔥 Error load SO data: {str(e)}")
         return pd.DataFrame()
 
 # --- 4. DATA PROCESSING ---
@@ -465,17 +554,6 @@ def main():
                 st.dataframe(raw_df.head(10), use_container_width=True)
         return
 
-    # Load data
-    with st.spinner("🔍 Scanning Google Drive folder untuk file 'Stock'..."):
-        raw_df = load_data()
-    
-    if raw_df.empty:
-        st.error("❌ Gagal memuat data.")
-        return
-    
-    # Process data
-    df = process_data(raw_df)
-    
     # === TAMBAHKAN DI SINI: DOWNLOAD BUTTON DI SIDEBAR ===
     with st.sidebar:
         st.markdown("---")
@@ -496,7 +574,7 @@ def main():
             )
             
             # Info about the data
-            st.caption(f"📊 {len(df)} rows, {len(df.columns)} columns")
+            st.caption(f"📊 Stock: {len(df)} rows, {len(df.columns)} columns")
             
             # Optional: Create summary version
             if st.checkbox("📋 Download summary version", value=True):
@@ -521,7 +599,6 @@ def main():
         else:
             st.info("Data tidak tersedia untuk download")
 
-    
     st.markdown("---")
 
     # --- KPI CARDS ---
@@ -540,7 +617,7 @@ def main():
     st.markdown("<br>", unsafe_allow_html=True)
 
     # --- TABS ---
-    tab1, tab2, tab3, tab4 = st.tabs(["📊 EXECUTIVE SUMMARY", "🔎 SKU INSPECTOR", "📋 BATCH INVENTORY", "📄 Sales Order Checking"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 EXECUTIVE SUMMARY", "🔎 SKU INSPECTOR", "📋 BATCH INVENTORY", "📄 SO Batch Checking", "📈 SALES ORDER ANALYSIS"])
 
     # === TAB 1: VISUALISASI ===
     with tab1:
@@ -839,316 +916,584 @@ def main():
         else:
             st.warning("Tidak ada data untuk ditampilkan.")
 
-        # === TAB 4: Sales Order Checking ===
-        with tab4:
-            st.subheader("📄 Sales Order Checking")
-            st.markdown("Upload file Sales Order (Excel/CSV) untuk assign batch secara otomatis")
-            
-            # File uploader
-            uploaded_file = st.file_uploader(
-                "Upload file Sales Order", 
-                type=['csv', 'xlsx', 'xls'],
-                help="Upload file Excel atau CSV yang berisi data Sales Order",
-                key="so_uploader"
-            )
-            
-            if uploaded_file is not None:
-                try:
-                    # Read the uploaded file
-                    if uploaded_file.name.endswith('.csv'):
-                        so_df = pd.read_csv(uploaded_file)
-                    else:
-                        so_df = pd.read_excel(uploaded_file)
-                    
-                    st.success(f"✅ File berhasil diupload: {uploaded_file.name}")
-                    st.info(f"📊 Data SO: {len(so_df)} baris")
-                    
-                    # Show preview
-                    with st.expander("🔍 Preview Data SO"):
-                        st.dataframe(so_df.head(), use_container_width=True)
-                    
-                    # Settings
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        allocation_method = st.selectbox(
-                            "Metode Alokasi:",
-                            ["FIFO (First Expired First Out)", "LIFO (Last In First Out)"],
-                            key="allocation_method"
-                        )
-                    
-                    with col2:
-                        include_critical = st.checkbox(
-                            "Include Batch Critical (<12 bulan)", 
-                            value=True,
-                            key="include_critical"
-                        )
-                    
-                    # Process button
-                    if st.button("🚀 Process Sales Order", type="primary", use_container_width=True, key="process_so"):
-                        with st.spinner("Memproses Sales Order..."):
-                            # Prepare stock data
-                            stock_for_allocation = df.copy()
+    # === TAB 4: SO Batch Checking ===
+    with tab4:
+        st.subheader("📄 SO Batch Checking")
+        st.markdown("Upload file Sales Order (Excel/CSV) untuk assign batch secara otomatis")
+        
+        # File uploader
+        uploaded_file = st.file_uploader(
+            "Upload file Sales Order", 
+            type=['csv', 'xlsx', 'xls'],
+            help="Upload file Excel atau CSV yang berisi data Sales Order",
+            key="so_uploader"
+        )
+        
+        if uploaded_file is not None:
+            try:
+                # Read the uploaded file
+                if uploaded_file.name.endswith('.csv'):
+                    so_df = pd.read_csv(uploaded_file)
+                else:
+                    so_df = pd.read_excel(uploaded_file)
+                
+                st.success(f"✅ File berhasil diupload: {uploaded_file.name}")
+                st.info(f"📊 Data SO: {len(so_df)} baris")
+                
+                # Show preview
+                with st.expander("🔍 Preview Data SO"):
+                    st.dataframe(so_df.head(), use_container_width=True)
+                
+                # Settings
+                col1, col2 = st.columns(2)
+                with col1:
+                    allocation_method = st.selectbox(
+                        "Metode Alokasi:",
+                        ["FIFO (First Expired First Out)", "LIFO (Last In First Out)"],
+                        key="allocation_method"
+                    )
+                
+                with col2:
+                    include_critical = st.checkbox(
+                        "Include Batch Critical (<12 bulan)", 
+                        value=True,
+                        key="include_critical"
+                    )
+                
+                # Process button
+                if st.button("🚀 Process Sales Order", type="primary", use_container_width=True, key="process_so"):
+                    with st.spinner("Memproses Sales Order..."):
+                        # Prepare stock data
+                        stock_for_allocation = df.copy()
+                        
+                        if not include_critical:
+                            stock_for_allocation = stock_for_allocation[stock_for_allocation['Status'] != 'Critical']
+                        
+                        # Sort stock
+                        if "FIFO" in allocation_method:
+                            stock_for_allocation = stock_for_allocation.sort_values(['Material', 'Umur (Bulan)'], ascending=[True, True])
+                        else:
+                            stock_for_allocation = stock_for_allocation.sort_values(['Material', 'Umur (Bulan)'], ascending=[True, False])
+                        
+                        # PROCESSING LOGIC - CLEAN VERSION
+                        results = []
+                        
+                        # Find columns
+                        material_col = 'Material' if 'Material' in so_df.columns else None
+                        material_desc_col = 'Material Description' if 'Material Description' in so_df.columns else None
+                        qty_col = 'Order Quantity (Item)' if 'Order Quantity (Item)' in so_df.columns else None
+                        
+                        # Fallback for column names
+                        if not material_col:
+                            for col in so_df.columns:
+                                if 'material' in str(col).lower() and 'description' not in str(col).lower():
+                                    material_col = col
+                                    break
+                        
+                        if not qty_col:
+                            for col in so_df.columns:
+                                if 'quantity' in str(col).lower():
+                                    qty_col = col
+                                    break
+                        
+                        if not material_col or not qty_col:
+                            st.error("❌ Kolom 'Material' dan 'Quantity' tidak ditemukan!")
+                            st.stop()
+                        
+                        # Process each SO line
+                        for idx, row in so_df.iterrows():
+                            # Get material code
+                            material_code = str(row[material_col]).strip() if pd.notna(row[material_col]) else ''
                             
-                            if not include_critical:
-                                stock_for_allocation = stock_for_allocation[stock_for_allocation['Status'] != 'Critical']
+                            # Skip empty material codes
+                            if not material_code or material_code.lower() in ['nan', 'null', '']:
+                                continue
                             
-                            # Sort stock
-                            if "FIFO" in allocation_method:
-                                stock_for_allocation = stock_for_allocation.sort_values(['Material', 'Umur (Bulan)'], ascending=[True, True])
+                            # Get quantity
+                            try:
+                                order_qty = float(row[qty_col]) if pd.notna(row[qty_col]) else 0
+                            except:
+                                order_qty = 0
+                            
+                            if order_qty <= 0:
+                                continue
+                            
+                            # Get material description
+                            material_desc = ''
+                            if material_desc_col and material_desc_col in row:
+                                material_desc = str(row[material_desc_col]) if pd.notna(row[material_desc_col]) else material_code
+                            
+                            # Get stock for this material
+                            material_stock = stock_for_allocation[
+                                stock_for_allocation['Material'].astype(str).str.strip() == material_code
+                            ].copy()
+                            
+                            # Create result row
+                            result_row = {}
+                            
+                            # Add original data
+                            for col in ['Sales Organization', 'Delivery Date', 'Sales Document']:
+                                if col in so_df.columns and col in row:
+                                    result_row[col] = row[col] if pd.notna(row[col]) else ''
+                            
+                            result_row['Material'] = material_code
+                            result_row['Material Description'] = material_desc
+                            result_row['Order Quantity'] = order_qty
+                            
+                            if material_stock.empty:
+                                result_row['Assigned Batch'] = 'NO STOCK'
+                                result_row['Status'] = 'NO STOCK'
+                                result_row['Assigned Qty'] = 0
+                                result_row['Remaining Qty'] = order_qty
+                            elif material_stock['Unrestricted'].sum() == 0:
+                                result_row['Assigned Batch'] = 'OUT OF STOCK'
+                                result_row['Status'] = 'OUT OF STOCK'
+                                result_row['Assigned Qty'] = 0
+                                result_row['Remaining Qty'] = order_qty
                             else:
-                                stock_for_allocation = stock_for_allocation.sort_values(['Material', 'Umur (Bulan)'], ascending=[True, False])
-                            
-                            # PROCESSING LOGIC - CLEAN VERSION
-                            results = []
-                            
-                            # Find columns
-                            material_col = 'Material' if 'Material' in so_df.columns else None
-                            material_desc_col = 'Material Description' if 'Material Description' in so_df.columns else None
-                            qty_col = 'Order Quantity (Item)' if 'Order Quantity (Item)' in so_df.columns else None
-                            
-                            # Fallback for column names
-                            if not material_col:
-                                for col in so_df.columns:
-                                    if 'material' in str(col).lower() and 'description' not in str(col).lower():
-                                        material_col = col
+                                # Assign batches
+                                remaining_qty = order_qty
+                                batches = []
+                                batch_details = []
+                                
+                                for _, stock_row in material_stock.iterrows():
+                                    if remaining_qty <= 0:
                                         break
-                            
-                            if not qty_col:
-                                for col in so_df.columns:
-                                    if 'quantity' in str(col).lower():
-                                        qty_col = col
-                                        break
-                            
-                            if not material_col or not qty_col:
-                                st.error("❌ Kolom 'Material' dan 'Quantity' tidak ditemukan!")
-                                st.stop()
-                            
-                            # Process each SO line
-                            for idx, row in so_df.iterrows():
-                                # Get material code
-                                material_code = str(row[material_col]).strip() if pd.notna(row[material_col]) else ''
+                                    
+                                    available_qty = stock_row['Unrestricted']
+                                    if available_qty <= 0:
+                                        continue
+                                    
+                                    assign_qty = min(available_qty, remaining_qty)
+                                    batch_num = str(stock_row['Batch']).strip()
+                                    
+                                    if batch_num and batch_num.lower() not in ['nan', 'n/a', '']:
+                                        batches.append(batch_num)
+                                        batch_details.append(f"{batch_num} ({assign_qty}pcs)")
+                                        remaining_qty -= assign_qty
                                 
-                                # Skip empty material codes
-                                if not material_code or material_code.lower() in ['nan', 'null', '']:
-                                    continue
-                                
-                                # Get quantity
-                                try:
-                                    order_qty = float(row[qty_col]) if pd.notna(row[qty_col]) else 0
-                                except:
-                                    order_qty = 0
-                                
-                                if order_qty <= 0:
-                                    continue
-                                
-                                # Get material description
-                                material_desc = ''
-                                if material_desc_col and material_desc_col in row:
-                                    material_desc = str(row[material_desc_col]) if pd.notna(row[material_desc_col]) else material_code
-                                
-                                # Get stock for this material
-                                material_stock = stock_for_allocation[
-                                    stock_for_allocation['Material'].astype(str).str.strip() == material_code
-                                ].copy()
-                                
-                                # Create result row
-                                result_row = {}
-                                
-                                # Add original data
-                                for col in ['Sales Organization', 'Delivery Date', 'Sales Document']:
-                                    if col in so_df.columns and col in row:
-                                        result_row[col] = row[col] if pd.notna(row[col]) else ''
-                                
-                                result_row['Material'] = material_code
-                                result_row['Material Description'] = material_desc
-                                result_row['Order Quantity'] = order_qty
-                                
-                                if material_stock.empty:
-                                    result_row['Assigned Batch'] = 'NO STOCK'
-                                    result_row['Status'] = 'NO STOCK'
-                                    result_row['Assigned Qty'] = 0
-                                    result_row['Remaining Qty'] = order_qty
-                                elif material_stock['Unrestricted'].sum() == 0:
-                                    result_row['Assigned Batch'] = 'OUT OF STOCK'
-                                    result_row['Status'] = 'OUT OF STOCK'
-                                    result_row['Assigned Qty'] = 0
-                                    result_row['Remaining Qty'] = order_qty
+                                if batches:
+                                    batch_str = ", ".join(batches)
+                                    assigned_qty = order_qty - remaining_qty
+                                    
+                                    result_row['Assigned Batch'] = batch_str
+                                    result_row['Assigned Qty'] = assigned_qty
+                                    result_row['Remaining Qty'] = remaining_qty
+                                    result_row['Status'] = 'FULLFILLED' if remaining_qty == 0 else 'PARTIAL'
                                 else:
-                                    # Assign batches
-                                    remaining_qty = order_qty
-                                    batches = []
-                                    batch_details = []
-                                    
-                                    for _, stock_row in material_stock.iterrows():
-                                        if remaining_qty <= 0:
-                                            break
-                                        
-                                        available_qty = stock_row['Unrestricted']
-                                        if available_qty <= 0:
-                                            continue
-                                        
-                                        assign_qty = min(available_qty, remaining_qty)
-                                        batch_num = str(stock_row['Batch']).strip()
-                                        
-                                        if batch_num and batch_num.lower() not in ['nan', 'n/a', '']:
-                                            batches.append(batch_num)
-                                            batch_details.append(f"{batch_num} ({assign_qty}pcs)")
-                                            remaining_qty -= assign_qty
-                                    
-                                    if batches:
-                                        batch_str = ", ".join(batches)
-                                        assigned_qty = order_qty - remaining_qty
-                                        
-                                        result_row['Assigned Batch'] = batch_str
-                                        result_row['Assigned Qty'] = assigned_qty
-                                        result_row['Remaining Qty'] = remaining_qty
-                                        result_row['Status'] = 'FULLFILLED' if remaining_qty == 0 else 'PARTIAL'
-                                    else:
-                                        result_row['Assigned Batch'] = 'NO BATCH'
-                                        result_row['Status'] = 'ERROR'
-                                        result_row['Assigned Qty'] = 0
-                                        result_row['Remaining Qty'] = order_qty
-                                
-                                results.append(result_row)
+                                    result_row['Assigned Batch'] = 'NO BATCH'
+                                    result_row['Status'] = 'ERROR'
+                                    result_row['Assigned Qty'] = 0
+                                    result_row['Remaining Qty'] = order_qty
                             
-                            # Create results dataframe
-                            result_df = pd.DataFrame(results)
+                            results.append(result_row)
+                        
+                        # Create results dataframe
+                        result_df = pd.DataFrame(results)
+                        
+                        if not result_df.empty:
+                            # Display results
+                            st.success(f"✅ Selesai! Diproses {len(result_df)} line SO")
                             
-                            if not result_df.empty:
-                                # Display results
-                                st.success(f"✅ Selesai! Diproses {len(result_df)} line SO")
-                                
-                                # Summary
-                                total_lines = len(result_df)
-                                fulfilled = len(result_df[result_df['Status'] == 'FULLFILLED'])
-                                partial = len(result_df[result_df['Status'] == 'PARTIAL'])
-                                no_stock = len(result_df[result_df['Status'].isin(['NO STOCK', 'OUT OF STOCK'])])
-                                
-                                col1, col2, col3, col4 = st.columns(4)
-                                col1.metric("Total Lines", total_lines)
-                                col2.metric("Fully Fulfilled", fulfilled)
-                                col3.metric("Partial", partial)
-                                col4.metric("No Stock", no_stock)
-                                
-                                # Display results - SIMPLE TABLE FOR BATCH COPYING
-                                st.markdown("### 📋 Hasil Alokasi Batch")
-                                
-                                # Create simple display dataframe
-                                display_cols = []
-                                if 'Sales Document' in result_df.columns:
-                                    display_cols.append('Sales Document')
-                                display_cols.extend(['Material', 'Material Description', 'Order Quantity', 'Assigned Batch', 'Status'])
-                                
-                                display_df = result_df[display_cols].copy()
-                                
-                                # Clean batch column for easy copying
-                                def clean_batch(batch):
-                                    if pd.isna(batch):
-                                        return ""
-                                    batch_str = str(batch)
-                                    if batch_str in ['NO STOCK', 'OUT OF STOCK', 'NO BATCH', 'ERROR']:
-                                        return ""
-                                    return batch_str
-                                
-                                display_df['Assigned Batch'] = display_df['Assigned Batch'].apply(clean_batch)
-                                
-                                st.dataframe(
-                                    display_df,
-                                    use_container_width=True,
-                                    hide_index=True,
-                                    column_config={
-                                        "Order Quantity": st.column_config.NumberColumn(
-                                            "Order Qty",
-                                            format="%d Pcs"
-                                        ),
-                                        "Assigned Batch": st.column_config.TextColumn(
-                                            "Batch",
-                                            help="Klik untuk select dan copy"
-                                        ),
-                                        "Status": st.column_config.SelectboxColumn(
-                                            "Status",
-                                            options=["FULLFILLED", "PARTIAL", "NO STOCK", "OUT OF STOCK", "ERROR"],
-                                        )
-                                    }
+                            # Summary
+                            total_lines = len(result_df)
+                            fulfilled = len(result_df[result_df['Status'] == 'FULLFILLED'])
+                            partial = len(result_df[result_df['Status'] == 'PARTIAL'])
+                            no_stock = len(result_df[result_df['Status'].isin(['NO STOCK', 'OUT OF STOCK'])])
+                            
+                            col1, col2, col3, col4 = st.columns(4)
+                            col1.metric("Total Lines", total_lines)
+                            col2.metric("Fully Fulfilled", fulfilled)
+                            col3.metric("Partial", partial)
+                            col4.metric("No Stock", no_stock)
+                            
+                            # Display results - SIMPLE TABLE FOR BATCH COPYING
+                            st.markdown("### 📋 Hasil Alokasi Batch")
+                            
+                            # Create simple display dataframe
+                            display_cols = []
+                            if 'Sales Document' in result_df.columns:
+                                display_cols.append('Sales Document')
+                            display_cols.extend(['Material', 'Material Description', 'Order Quantity', 'Assigned Batch', 'Status'])
+                            
+                            display_df = result_df[display_cols].copy()
+                            
+                            # Clean batch column for easy copying
+                            def clean_batch(batch):
+                                if pd.isna(batch):
+                                    return ""
+                                batch_str = str(batch)
+                                if batch_str in ['NO STOCK', 'OUT OF STOCK', 'NO BATCH', 'ERROR']:
+                                    return ""
+                                return batch_str
+                            
+                            display_df['Assigned Batch'] = display_df['Assigned Batch'].apply(clean_batch)
+                            
+                            st.dataframe(
+                                display_df,
+                                use_container_width=True,
+                                hide_index=True,
+                                column_config={
+                                    "Order Quantity": st.column_config.NumberColumn(
+                                        "Order Qty",
+                                        format="%d Pcs"
+                                    ),
+                                    "Assigned Batch": st.column_config.TextColumn(
+                                        "Batch",
+                                        help="Klik untuk select dan copy"
+                                    ),
+                                    "Status": st.column_config.SelectboxColumn(
+                                        "Status",
+                                        options=["FULLFILLED", "PARTIAL", "NO STOCK", "OUT OF STOCK", "ERROR"],
+                                    )
+                                }
+                            )
+                            
+                            # Quick batch copy feature
+                            st.markdown("### 📋 Quick Batch Copy")
+                            
+                            # Get all batches
+                            all_batches = []
+                            for batch_str in result_df['Assigned Batch']:
+                                if pd.notna(batch_str):
+                                    batches = str(batch_str).split(',')
+                                    for b in batches:
+                                        b_clean = b.strip()
+                                        if b_clean and b_clean not in ['NO STOCK', 'OUT OF STOCK', 'NO BATCH', 'ERROR']:
+                                            all_batches.append(b_clean)
+                            
+                            if all_batches:
+                                # Text area for easy copying
+                                batch_text = ', '.join(all_batches)
+                                st.text_area(
+                                    "Semua Batch (siap di-copy):",
+                                    value=batch_text,
+                                    height=100,
+                                    key="all_batches"
                                 )
                                 
-                                # Quick batch copy feature
-                                st.markdown("### 📋 Quick Batch Copy")
-                                
-                                # Get all batches
-                                all_batches = []
-                                for batch_str in result_df['Assigned Batch']:
-                                    if pd.notna(batch_str):
-                                        batches = str(batch_str).split(',')
-                                        for b in batches:
-                                            b_clean = b.strip()
-                                            if b_clean and b_clean not in ['NO STOCK', 'OUT OF STOCK', 'NO BATCH', 'ERROR']:
-                                                all_batches.append(b_clean)
-                                
-                                if all_batches:
-                                    # Text area for easy copying
-                                    batch_text = ', '.join(all_batches)
-                                    st.text_area(
-                                        "Semua Batch (siap di-copy):",
-                                        value=batch_text,
-                                        height=100,
-                                        key="all_batches"
-                                    )
-                                    
-                                    # Count batches
-                                    st.info(f"📊 Total {len(all_batches)} batch yang dialokasikan")
-                                
-                                # Download options
-                                st.markdown("### 📥 Download Hasil")
-                                col1, col2 = st.columns(2)
-                                
-                                with col1:
-                                    # Download full results
-                                    full_csv = result_df.to_csv(index=False)
-                                    st.download_button(
-                                        "Download Full Results (CSV)",
-                                        data=full_csv,
-                                        file_name=f"SO_Results_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-                                        mime="text/csv",
-                                        use_container_width=True
-                                    )
-                                
-                                with col2:
-                                    # Download batch list only
-                                    batch_df = pd.DataFrame({'Batch': all_batches})
-                                    batch_csv = batch_df.to_csv(index=False)
-                                    st.download_button(
-                                        "Download Batch List Only (CSV)",
-                                        data=batch_csv,
-                                        file_name=f"Batch_List_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-                                        mime="text/csv",
-                                        use_container_width=True
-                                    )
-                                
-                                # Show detailed view
-                                with st.expander("🔍 Lihat Detail Lengkap"):
+                                # Count batches
+                                st.info(f"📊 Total {len(all_batches)} batch yang dialokasikan")
+                            
+                            # Download options
+                            st.markdown("### 📥 Download Hasil")
+                            col1, col2 = st.columns(2)
+                            
+                            with col1:
+                                # Download full results
+                                full_csv = result_df.to_csv(index=False)
+                                st.download_button(
+                                    "Download Full Results (CSV)",
+                                    data=full_csv,
+                                    file_name=f"SO_Results_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                                    mime="text/csv",
+                                    use_container_width=True
+                                )
+                            
+                            with col2:
+                                # Download batch list only
+                                batch_df = pd.DataFrame({'Batch': all_batches})
+                                batch_csv = batch_df.to_csv(index=False)
+                                st.download_button(
+                                    "Download Batch List Only (CSV)",
+                                    data=batch_csv,
+                                    file_name=f"Batch_List_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                                    mime="text/csv",
+                                    use_container_width=True
+                                )
+                            
+                            # Show detailed view
+                            with st.expander("🔍 Lihat Detail Lengkap"):
+                                st.dataframe(
+                                    result_df,
+                                    use_container_width=True,
+                                    hide_index=True
+                                )
+                            
+                            # Show problem lines
+                            problems = result_df[~result_df['Status'].isin(['FULLFILLED'])]
+                            if not problems.empty:
+                                st.warning(f"⚠️ {len(problems)} line memiliki masalah")
+                                with st.expander("Lihat line dengan masalah"):
                                     st.dataframe(
-                                        result_df,
+                                        problems[['Material', 'Order Quantity', 'Assigned Batch', 'Status']],
                                         use_container_width=True,
                                         hide_index=True
                                     )
-                                
-                                # Show problem lines
-                                problems = result_df[~result_df['Status'].isin(['FULLFILLED'])]
-                                if not problems.empty:
-                                    st.warning(f"⚠️ {len(problems)} line memiliki masalah")
-                                    with st.expander("Lihat line dengan masalah"):
-                                        st.dataframe(
-                                            problems[['Material', 'Order Quantity', 'Assigned Batch', 'Status']],
-                                            use_container_width=True,
-                                            hide_index=True
-                                        )
                             
                 except Exception as e:
                     st.error(f"❌ Error: {str(e)}")
             else:
                 # No file uploaded
                 st.info("📁 Upload file Sales Order untuk memulai")
+
+    # === TAB 5: SALES ORDER ANALYSIS ===
+    with tab5:
+        st.subheader("📈 Sales Order Analysis (SO RSLR)")
+        
+        # Load Sales Order data
+        with st.spinner("🔍 Loading Sales Order data..."):
+            so_data_raw = load_sales_order_data()
+        
+        if so_data_raw.empty:
+            st.info("ℹ️ Upload file dengan nama 'SO RSLR' ke Google Drive folder untuk melihat analysis")
+            
+            # Update sidebar to show SO data is not available
+            with st.sidebar:
+                if st.checkbox("📈 Show SO Data Status", value=False):
+                    st.warning("SO RSLR data tidak tersedia")
+            return
+        
+        # Process SO data
+        so_df = so_data_raw.copy()
+        
+        # Show data info
+        st.info(f"📊 Data Sales Order: {len(so_df)} baris")
+        
+        with st.expander("🔍 Lihat data SO (10 baris pertama)"):
+            st.dataframe(so_df.head(10), use_container_width=True)
+        
+        # Update sidebar with SO download option
+        with st.sidebar:
+            if 'so_data_raw' in locals() and not so_data_raw.empty:
+                st.markdown("---")
+                st.subheader("📈 Sales Order Data")
+                
+                so_csv = so_data_raw.to_csv(index=False)
+                st.download_button(
+                    label="📊 Download SO Data (CSV)",
+                    data=so_csv,
+                    file_name=f"SO_RSLR_Data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv",
+                    help="Download semua data Sales Order RSLR",
+                    use_container_width=True
+                )
+                st.caption(f"📊 SO: {len(so_data_raw)} rows")
+        
+        # ===== FILTER SECTION =====
+        st.markdown("### 🔍 Filter Data")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            # Filter Rejection Reason
+            if 'Rejection Reason Description' in so_df.columns:
+                rejection_options = ["All", "Blank"] + sorted(so_df['Rejection Reason Description'].dropna().unique().tolist())
+                selected_rejection = st.selectbox("Rejection Reason:", rejection_options)
+            else:
+                selected_rejection = "All"
+                st.info("Kolom Rejection Reason tidak ditemukan")
+            
+        with col2:
+            # Filter Delivery Status
+            if 'Overall Delivery Status Item Description' in so_df.columns:
+                delivery_options = ["All"] + sorted(so_df['Overall Delivery Status Item Description'].dropna().unique().tolist())
+                selected_delivery = st.selectbox("Delivery Status:", delivery_options)
+            else:
+                selected_delivery = "All"
+                st.info("Kolom Delivery Status tidak ditemukan")
+            
+        with col3:
+            # Filter Delivery Block
+            if 'Delivery Block Description' in so_df.columns:
+                block_options = ["All", "Blank"] + sorted(so_df['Delivery Block Description'].dropna().unique().tolist())
+                selected_block = st.selectbox("Delivery Block:", block_options)
+            else:
+                selected_block = "All"
+                st.info("Kolom Delivery Block tidak ditemukan")
+        
+        # Apply filters
+        filtered_so = so_df.copy()
+        
+        if selected_rejection != "All" and 'Rejection Reason Description' in filtered_so.columns:
+            if selected_rejection == "Blank":
+                filtered_so = filtered_so[filtered_so['Rejection Reason Description'].isna()]
+            else:
+                filtered_so = filtered_so[filtered_so['Rejection Reason Description'] == selected_rejection]
+        
+        if selected_delivery != "All" and 'Overall Delivery Status Item Description' in filtered_so.columns:
+            filtered_so = filtered_so[filtered_so['Overall Delivery Status Item Description'] == selected_delivery]
+        
+        if selected_block != "All" and 'Delivery Block Description' in filtered_so.columns:
+            if selected_block == "Blank":
+                filtered_so = filtered_so[filtered_so['Delivery Block Description'].isna()]
+            else:
+                filtered_so = filtered_so[filtered_so['Delivery Block Description'] == selected_block]
+        
+        # ===== KPI SECTION =====
+        st.markdown("### 📊 Key Metrics")
+        
+        total_so = len(filtered_so)
+        total_qty = filtered_so['Order Quantity (Item)'].sum() if 'Order Quantity (Item)' in filtered_so.columns else 0
+        total_value = filtered_so['Net Value (Item)'].sum() if 'Net Value (Item)' in filtered_so.columns else 0
+        unique_sku = filtered_so['Material'].nunique() if 'Material' in filtered_so.columns else 0
+        unique_customers = filtered_so['Sold-To Party Name'].nunique() if 'Sold-To Party Name' in filtered_so.columns else 0
+        unique_docs = filtered_so['Sales Document'].nunique() if 'Sales Document' in filtered_so.columns else 0
+        
+        kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+        kpi1.metric("📄 Total SO Lines", f"{total_so:,}")
+        kpi2.metric("📦 Total Quantity", f"{total_qty:,.0f}")
+        kpi3.metric("💰 Total Value", f"Rp {total_value:,.0f}")
+        kpi4.metric("👥 Unique Customers", f"{unique_customers}")
+        
+        # ===== CHARTS SECTION =====
+        st.markdown("### 📈 Analysis Charts")
+        
+        col_chart1, col_chart2 = st.columns(2)
+        
+        with col_chart1:
+            # Top 10 Customers by Value
+            if 'Sold-To Party Name' in filtered_so.columns and 'Net Value (Item)' in filtered_so.columns:
+                st.subheader("Top 10 Customers by Value")
+                customer_value = filtered_so.groupby('Sold-To Party Name')['Net Value (Item)'].sum().reset_index()
+                customer_value = customer_value.sort_values('Net Value (Item)', ascending=False).head(10)
+                
+                fig_customer = px.bar(customer_value, x='Net Value (Item)', y='Sold-To Party Name',
+                                      orientation='h', text='Net Value (Item)',
+                                      color='Net Value (Item)', color_continuous_scale='Blues')
+                fig_customer.update_traces(texttemplate='Rp %{text:,.0f}', textposition='outside')
+                fig_customer.update_layout(height=400)
+                st.plotly_chart(fig_customer, use_container_width=True)
+        
+        with col_chart2:
+            # Delivery Status Distribution
+            if 'Overall Delivery Status Item Description' in filtered_so.columns:
+                st.subheader("Delivery Status Distribution")
+                status_counts = filtered_so['Overall Delivery Status Item Description'].value_counts().reset_index()
+                status_counts.columns = ['Status', 'Count']
+                
+                fig_status = px.pie(status_counts, values='Count', names='Status',
+                                   hole=0.4, color_discrete_sequence=px.colors.qualitative.Set3)
+                fig_status.update_layout(height=400)
+                st.plotly_chart(fig_status, use_container_width=True)
+        
+        # ===== DETAILED TABLE SECTION =====
+        st.markdown("### 📋 Detailed View")
+        
+        # Show selected columns
+        display_columns = [
+            'Sold-To Party Name', 'Document Date', 'Sales Document',
+            'Material', 'Material Description', 'Order Quantity (Item)',
+            'Rejection Reason Description', 'Net Price', 'Net Value (Item)',
+            'Overall Delivery Status Item Description', 'Confirmed Quantity (Item)',
+            'Delivery Block Description'
+        ]
+        
+        # Filter only columns that exist
+        available_columns = [col for col in display_columns if col in filtered_so.columns]
+        display_df = filtered_so[available_columns].copy()
+        
+        # Format currency columns
+        if 'Net Price' in display_df.columns:
+            display_df['Net Price'] = display_df['Net Price'].apply(lambda x: f"Rp {x:,.0f}" if pd.notna(x) else "")
+        if 'Net Value (Item)' in display_df.columns:
+            display_df['Net Value (Item)'] = display_df['Net Value (Item)'].apply(lambda x: f"Rp {x:,.0f}" if pd.notna(x) else "")
+        
+        st.dataframe(
+            display_df,
+            use_container_width=True,
+            hide_index=True,
+            height=400
+        )
+        
+        # ===== SUMMARY BY STATUS =====
+        st.markdown("### 📊 Summary by Status")
+        
+        summary_cols = st.columns(3)
+        
+        with summary_cols[0]:
+            # Summary by Delivery Status
+            if 'Overall Delivery Status Item Description' in filtered_so.columns:
+                st.subheader("By Delivery Status")
+                delivery_summary = filtered_so.groupby('Overall Delivery Status Item Description').agg({
+                    'Order Quantity (Item)': 'sum',
+                    'Net Value (Item)': 'sum',
+                    'Sales Document': 'nunique'
+                }).reset_index()
+                
+                delivery_summary = delivery_summary.rename(columns={
+                    'Order Quantity (Item)': 'Total Qty',
+                    'Net Value (Item)': 'Total Value',
+                    'Sales Document': 'SO Count'
+                })
+                
+                st.dataframe(delivery_summary, use_container_width=True, hide_index=True)
+        
+        with summary_cols[1]:
+            # Summary by Delivery Block
+            if 'Delivery Block Description' in filtered_so.columns:
+                st.subheader("By Delivery Block")
+                block_summary = filtered_so.groupby('Delivery Block Description').agg({
+                    'Order Quantity (Item)': 'sum',
+                    'Net Value (Item)': 'sum',
+                    'Sales Document': 'nunique'
+                }).reset_index()
+                
+                block_summary = block_summary.rename(columns={
+                    'Order Quantity (Item)': 'Total Qty',
+                    'Net Value (Item)': 'Total Value',
+                    'Sales Document': 'SO Count'
+                })
+                
+                st.dataframe(block_summary, use_container_width=True, hide_index=True)
+        
+        with summary_cols[2]:
+            # Summary by Rejection Reason
+            if 'Rejection Reason Description' in filtered_so.columns:
+                st.subheader("By Rejection Reason")
+                rejection_summary = filtered_so.groupby('Rejection Reason Description').agg({
+                    'Order Quantity (Item)': 'sum',
+                    'Net Value (Item)': 'sum',
+                    'Sales Document': 'nunique'
+                }).reset_index()
+                
+                rejection_summary = rejection_summary.rename(columns={
+                    'Order Quantity (Item)': 'Total Qty',
+                    'Net Value (Item)': 'Total Value',
+                    'Sales Document': 'SO Count'
+                })
+                
+                st.dataframe(rejection_summary, use_container_width=True, hide_index=True)
+        
+        # ===== DOWNLOAD SECTION =====
+        st.markdown("### 📥 Download Data")
+        
+        col_dl1, col_dl2 = st.columns(2)
+        
+        with col_dl1:
+            # Download filtered data
+            csv_filtered = filtered_so.to_csv(index=False)
+            st.download_button(
+                "Download Filtered SO Data (CSV)",
+                data=csv_filtered,
+                file_name=f"SO_Filtered_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+        
+        with col_dl2:
+            # Download summary data
+            if 'Material' in filtered_so.columns and 'Material Description' in filtered_so.columns:
+                summary_data = filtered_so.groupby(['Material', 'Material Description']).agg({
+                    'Order Quantity (Item)': 'sum',
+                    'Net Value (Item)': 'sum',
+                    'Sales Document': 'nunique'
+                }).reset_index()
+                
+                summary_data = summary_data.rename(columns={
+                    'Order Quantity (Item)': 'Total Qty',
+                    'Net Value (Item)': 'Total Value',
+                    'Sales Document': 'SO Count'
+                })
+                
+                csv_summary = summary_data.to_csv(index=False)
+                st.download_button(
+                    "Download SKU Summary (CSV)",
+                    data=csv_summary,
+                    file_name=f"SO_SKU_Summary_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
 
 if __name__ == "__main__":
     main()
