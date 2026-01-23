@@ -1227,275 +1227,275 @@ def main():
                 # No file uploaded
                 st.info("📁 Upload file Sales Order untuk memulai")
 
-    # === TAB 5: SALES ORDER ANALYSIS ===
-    with tab5:
-        st.subheader("📈 Sales Order Analysis (SO RSLR)")
-        
-        # Load Sales Order data
-        with st.spinner("🔍 Loading Sales Order data..."):
-            so_data_raw = load_sales_order_data()
-        
-        if so_data_raw.empty:
-            st.info("ℹ️ Upload file dengan nama 'SO RSLR' ke Google Drive folder untuk melihat analysis")
+        # === TAB 5: SALES ORDER ANALYSIS ===
+        with tab5:
+            st.subheader("📈 Sales Order Analysis (SO RSLR)")
             
-            # Update sidebar to show SO data is not available
-            with st.sidebar:
-                if st.checkbox("📈 Show SO Data Status", value=False):
-                    st.warning("SO RSLR data tidak tersedia")
-            # PERBAIKAN: HAPUS 'return' di sini karena akan menghentikan seluruh script
-            # return  # <-- HAPUS BARIS INI
+            # Load Sales Order data
+            with st.spinner("🔍 Loading Sales Order data..."):
+                so_data_raw = load_sales_order_data()
             
-        # Process SO data - LANJUTKAN DENGAN INI
-        else:
-            so_df = so_data_raw.copy()
-            
-            # Show data info
-            st.info(f"📊 Data Sales Order: {len(so_df)} baris")
-            
-            with st.expander("🔍 Lihat data SO (10 baris pertama)"):
-                st.dataframe(so_df.head(10), use_container_width=True)
-            
-            # Update sidebar with SO download option
-            with st.sidebar:
-                if not so_data_raw.empty:
-                    st.markdown("---")
-                    st.subheader("📈 Sales Order Data")
-                    
-                    so_csv = so_data_raw.to_csv(index=False)
-                    st.download_button(
-                        label="📊 Download SO Data (CSV)",
-                        data=so_csv,
-                        file_name=f"SO_RSLR_Data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                        mime="text/csv",
-                        help="Download semua data Sales Order RSLR",
-                        use_container_width=True
-                    )
-                    st.caption(f"📊 SO: {len(so_data_raw)} rows")
-            
-            # ===== FILTER SECTION =====
-            st.markdown("### 🔍 Filter Data")
-            
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
-                # Filter Rejection Reason
-                if 'Rejection Reason Description' in so_df.columns:
-                    rejection_options = ["All", "Blank"] + sorted(so_df['Rejection Reason Description'].dropna().unique().tolist())
-                    selected_rejection = st.selectbox("Rejection Reason:", rejection_options)
-                else:
-                    selected_rejection = "All"
-                    st.info("Kolom Rejection Reason tidak ditemukan")
+            if so_data_raw.empty:
+                st.info("ℹ️ Upload file dengan nama 'SO RSLR' ke Google Drive folder untuk melihat analysis")
                 
-            with col2:
-                # Filter Delivery Status
-                if 'Overall Delivery Status Item Description' in so_df.columns:
-                    delivery_options = ["All"] + sorted(so_df['Overall Delivery Status Item Description'].dropna().unique().tolist())
-                    selected_delivery = st.selectbox("Delivery Status:", delivery_options)
-                else:
-                    selected_delivery = "All"
-                    st.info("Kolom Delivery Status tidak ditemukan")
+                # Update sidebar to show SO data is not available
+                with st.sidebar:
+                    if st.checkbox("📈 Show SO Data Status", value=False):
+                        st.warning("SO RSLR data tidak tersedia")
+                # PERBAIKAN: HAPUS 'return' di sini karena akan menghentikan seluruh script
+                # return  # <-- HAPUS BARIS INI
                 
-            with col3:
-                # Filter Delivery Block
-                if 'Delivery Block Description' in so_df.columns:
-                    block_options = ["All", "Blank"] + sorted(so_df['Delivery Block Description'].dropna().unique().tolist())
-                    selected_block = st.selectbox("Delivery Block:", block_options)
-                else:
-                    selected_block = "All"
-                    st.info("Kolom Delivery Block tidak ditemukan")
-            
-            # Apply filters
-            filtered_so = so_df.copy()
-            
-            if selected_rejection != "All" and 'Rejection Reason Description' in filtered_so.columns:
-                if selected_rejection == "Blank":
-                    filtered_so = filtered_so[filtered_so['Rejection Reason Description'].isna()]
-                else:
-                    filtered_so = filtered_so[filtered_so['Rejection Reason Description'] == selected_rejection]
-            
-            if selected_delivery != "All" and 'Overall Delivery Status Item Description' in filtered_so.columns:
-                filtered_so = filtered_so[filtered_so['Overall Delivery Status Item Description'] == selected_delivery]
-            
-            if selected_block != "All" and 'Delivery Block Description' in filtered_so.columns:
-                if selected_block == "Blank":
-                    filtered_so = filtered_so[filtered_so['Delivery Block Description'].isna()]
-                else:
-                    filtered_so = filtered_so[filtered_so['Delivery Block Description'] == selected_block]
-            
-            # ===== KPI SECTION =====
-            st.markdown("### 📊 Key Metrics")
-            
-            total_so = len(filtered_so)
-            total_qty = filtered_so['Order Quantity (Item)'].sum() if 'Order Quantity (Item)' in filtered_so.columns else 0
-            total_value = filtered_so['Net Value (Item)'].sum() if 'Net Value (Item)' in filtered_so.columns else 0
-            unique_sku = filtered_so['Material'].nunique() if 'Material' in filtered_so.columns else 0
-            unique_customers = filtered_so['Sold-To Party Name'].nunique() if 'Sold-To Party Name' in filtered_so.columns else 0
-            unique_docs = filtered_so['Sales Document'].nunique() if 'Sales Document' in filtered_so.columns else 0
-            
-            kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-            kpi1.metric("📄 Total SO Lines", f"{total_so:,}")
-            kpi2.metric("📦 Total Quantity", f"{total_qty:,.0f}")
-            kpi3.metric("💰 Total Value", f"Rp {total_value:,.0f}")
-            kpi4.metric("👥 Unique Customers", f"{unique_customers}")
-            
-            # ===== CHARTS SECTION =====
-            st.markdown("### 📈 Analysis Charts")
-            
-            col_chart1, col_chart2 = st.columns(2)
-            
-            with col_chart1:
-                # Top 10 Customers by Value
-                if 'Sold-To Party Name' in filtered_so.columns and 'Net Value (Item)' in filtered_so.columns:
-                    st.subheader("Top 10 Customers by Value")
-                    customer_value = filtered_so.groupby('Sold-To Party Name')['Net Value (Item)'].sum().reset_index()
-                    customer_value = customer_value.sort_values('Net Value (Item)', ascending=False).head(10)
+            # Process SO data - LANJUTKAN DENGAN INI
+            else:
+                so_df = so_data_raw.copy()
+                
+                # Show data info
+                st.info(f"📊 Data Sales Order: {len(so_df)} baris")
+                
+                with st.expander("🔍 Lihat data SO (10 baris pertama)"):
+                    st.dataframe(so_df.head(10), use_container_width=True)
+                
+                # Update sidebar with SO download option
+                with st.sidebar:
+                    if not so_data_raw.empty:
+                        st.markdown("---")
+                        st.subheader("📈 Sales Order Data")
+                        
+                        so_csv = so_data_raw.to_csv(index=False)
+                        st.download_button(
+                            label="📊 Download SO Data (CSV)",
+                            data=so_csv,
+                            file_name=f"SO_RSLR_Data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                            mime="text/csv",
+                            help="Download semua data Sales Order RSLR",
+                            use_container_width=True
+                        )
+                        st.caption(f"📊 SO: {len(so_data_raw)} rows")
+                
+                # ===== FILTER SECTION =====
+                st.markdown("### 🔍 Filter Data")
+                
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    # Filter Rejection Reason
+                    if 'Rejection Reason Description' in so_df.columns:
+                        rejection_options = ["All", "Blank"] + sorted(so_df['Rejection Reason Description'].dropna().unique().tolist())
+                        selected_rejection = st.selectbox("Rejection Reason:", rejection_options)
+                    else:
+                        selected_rejection = "All"
+                        st.info("Kolom Rejection Reason tidak ditemukan")
                     
-                    fig_customer = px.bar(customer_value, x='Net Value (Item)', y='Sold-To Party Name',
-                                          orientation='h', text='Net Value (Item)',
-                                          color='Net Value (Item)', color_continuous_scale='Blues')
-                    fig_customer.update_traces(texttemplate='Rp %{text:,.0f}', textposition='outside')
-                    fig_customer.update_layout(height=400)
-                    st.plotly_chart(fig_customer, use_container_width=True)
-            
-            with col_chart2:
-                # Delivery Status Distribution
-                if 'Overall Delivery Status Item Description' in filtered_so.columns:
-                    st.subheader("Delivery Status Distribution")
-                    status_counts = filtered_so['Overall Delivery Status Item Description'].value_counts().reset_index()
-                    status_counts.columns = ['Status', 'Count']
+                with col2:
+                    # Filter Delivery Status
+                    if 'Overall Delivery Status Item Description' in so_df.columns:
+                        delivery_options = ["All"] + sorted(so_df['Overall Delivery Status Item Description'].dropna().unique().tolist())
+                        selected_delivery = st.selectbox("Delivery Status:", delivery_options)
+                    else:
+                        selected_delivery = "All"
+                        st.info("Kolom Delivery Status tidak ditemukan")
                     
-                    fig_status = px.pie(status_counts, values='Count', names='Status',
-                                       hole=0.4, color_discrete_sequence=px.colors.qualitative.Set3)
-                    fig_status.update_layout(height=400)
-                    st.plotly_chart(fig_status, use_container_width=True)
-            
-            # ===== DETAILED TABLE SECTION =====
-            st.markdown("### 📋 Detailed View")
-            
-            # Show selected columns
-            display_columns = [
-                'Sold-To Party Name', 'Document Date', 'Sales Document',
-                'Material', 'Material Description', 'Order Quantity (Item)',
-                'Rejection Reason Description', 'Net Price', 'Net Value (Item)',
-                'Overall Delivery Status Item Description', 'Confirmed Quantity (Item)',
-                'Delivery Block Description'
-            ]
-            
-            # Filter only columns that exist
-            available_columns = [col for col in display_columns if col in filtered_so.columns]
-            display_df = filtered_so[available_columns].copy()
-            
-            # Format currency columns
-            if 'Net Price' in display_df.columns:
-                display_df['Net Price'] = display_df['Net Price'].apply(lambda x: f"Rp {x:,.0f}" if pd.notna(x) else "")
-            if 'Net Value (Item)' in display_df.columns:
-                display_df['Net Value (Item)'] = display_df['Net Value (Item)'].apply(lambda x: f"Rp {x:,.0f}" if pd.notna(x) else "")
-            
-            st.dataframe(
-                display_df,
-                use_container_width=True,
-                hide_index=True,
-                height=400
-            )
-            
-            # ===== SUMMARY BY STATUS =====
-            st.markdown("### 📊 Summary by Status")
-            
-            summary_cols = st.columns(3)
-            
-            with summary_cols[0]:
-                # Summary by Delivery Status
-                if 'Overall Delivery Status Item Description' in filtered_so.columns:
-                    st.subheader("By Delivery Status")
-                    delivery_summary = filtered_so.groupby('Overall Delivery Status Item Description').agg({
-                        'Order Quantity (Item)': 'sum',
-                        'Net Value (Item)': 'sum',
-                        'Sales Document': 'nunique'
-                    }).reset_index()
-                    
-                    delivery_summary = delivery_summary.rename(columns={
-                        'Order Quantity (Item)': 'Total Qty',
-                        'Net Value (Item)': 'Total Value',
-                        'Sales Document': 'SO Count'
-                    })
-                    
-                    st.dataframe(delivery_summary, use_container_width=True, hide_index=True)
-            
-            with summary_cols[1]:
-                # Summary by Delivery Block
-                if 'Delivery Block Description' in filtered_so.columns:
-                    st.subheader("By Delivery Block")
-                    block_summary = filtered_so.groupby('Delivery Block Description').agg({
-                        'Order Quantity (Item)': 'sum',
-                        'Net Value (Item)': 'sum',
-                        'Sales Document': 'nunique'
-                    }).reset_index()
-                    
-                    block_summary = block_summary.rename(columns={
-                        'Order Quantity (Item)': 'Total Qty',
-                        'Net Value (Item)': 'Total Value',
-                        'Sales Document': 'SO Count'
-                    })
-                    
-                    st.dataframe(block_summary, use_container_width=True, hide_index=True)
-            
-            with summary_cols[2]:
-                # Summary by Rejection Reason
-                if 'Rejection Reason Description' in filtered_so.columns:
-                    st.subheader("By Rejection Reason")
-                    rejection_summary = filtered_so.groupby('Rejection Reason Description').agg({
-                        'Order Quantity (Item)': 'sum',
-                        'Net Value (Item)': 'sum',
-                        'Sales Document': 'nunique'
-                    }).reset_index()
-                    
-                    rejection_summary = rejection_summary.rename(columns={
-                        'Order Quantity (Item)': 'Total Qty',
-                        'Net Value (Item)': 'Total Value',
-                        'Sales Document': 'SO Count'
-                    })
-                    
-                    st.dataframe(rejection_summary, use_container_width=True, hide_index=True)
-            
-            # ===== DOWNLOAD SECTION =====
-            st.markdown("### 📥 Download Data")
-            
-            col_dl1, col_dl2 = st.columns(2)
-            
-            with col_dl1:
-                # Download filtered data
-                csv_filtered = filtered_so.to_csv(index=False)
-                st.download_button(
-                    "Download Filtered SO Data (CSV)",
-                    data=csv_filtered,
-                    file_name=f"SO_Filtered_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-                    mime="text/csv",
-                    use_container_width=True
+                with col3:
+                    # Filter Delivery Block
+                    if 'Delivery Block Description' in so_df.columns:
+                        block_options = ["All", "Blank"] + sorted(so_df['Delivery Block Description'].dropna().unique().tolist())
+                        selected_block = st.selectbox("Delivery Block:", block_options)
+                    else:
+                        selected_block = "All"
+                        st.info("Kolom Delivery Block tidak ditemukan")
+                
+                # Apply filters
+                filtered_so = so_df.copy()
+                
+                if selected_rejection != "All" and 'Rejection Reason Description' in filtered_so.columns:
+                    if selected_rejection == "Blank":
+                        filtered_so = filtered_so[filtered_so['Rejection Reason Description'].isna()]
+                    else:
+                        filtered_so = filtered_so[filtered_so['Rejection Reason Description'] == selected_rejection]
+                
+                if selected_delivery != "All" and 'Overall Delivery Status Item Description' in filtered_so.columns:
+                    filtered_so = filtered_so[filtered_so['Overall Delivery Status Item Description'] == selected_delivery]
+                
+                if selected_block != "All" and 'Delivery Block Description' in filtered_so.columns:
+                    if selected_block == "Blank":
+                        filtered_so = filtered_so[filtered_so['Delivery Block Description'].isna()]
+                    else:
+                        filtered_so = filtered_so[filtered_so['Delivery Block Description'] == selected_block]
+                
+                # ===== KPI SECTION =====
+                st.markdown("### 📊 Key Metrics")
+                
+                total_so = len(filtered_so)
+                total_qty = filtered_so['Order Quantity (Item)'].sum() if 'Order Quantity (Item)' in filtered_so.columns else 0
+                total_value = filtered_so['Net Value (Item)'].sum() if 'Net Value (Item)' in filtered_so.columns else 0
+                unique_sku = filtered_so['Material'].nunique() if 'Material' in filtered_so.columns else 0
+                unique_customers = filtered_so['Sold-To Party Name'].nunique() if 'Sold-To Party Name' in filtered_so.columns else 0
+                unique_docs = filtered_so['Sales Document'].nunique() if 'Sales Document' in filtered_so.columns else 0
+                
+                kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+                kpi1.metric("📄 Total SO Lines", f"{total_so:,}")
+                kpi2.metric("📦 Total Quantity", f"{total_qty:,.0f}")
+                kpi3.metric("💰 Total Value", f"Rp {total_value:,.0f}")
+                kpi4.metric("👥 Unique Customers", f"{unique_customers}")
+                
+                # ===== CHARTS SECTION =====
+                st.markdown("### 📈 Analysis Charts")
+                
+                col_chart1, col_chart2 = st.columns(2)
+                
+                with col_chart1:
+                    # Top 10 Customers by Value
+                    if 'Sold-To Party Name' in filtered_so.columns and 'Net Value (Item)' in filtered_so.columns:
+                        st.subheader("Top 10 Customers by Value")
+                        customer_value = filtered_so.groupby('Sold-To Party Name')['Net Value (Item)'].sum().reset_index()
+                        customer_value = customer_value.sort_values('Net Value (Item)', ascending=False).head(10)
+                        
+                        fig_customer = px.bar(customer_value, x='Net Value (Item)', y='Sold-To Party Name',
+                                              orientation='h', text='Net Value (Item)',
+                                              color='Net Value (Item)', color_continuous_scale='Blues')
+                        fig_customer.update_traces(texttemplate='Rp %{text:,.0f}', textposition='outside')
+                        fig_customer.update_layout(height=400)
+                        st.plotly_chart(fig_customer, use_container_width=True)
+                
+                with col_chart2:
+                    # Delivery Status Distribution
+                    if 'Overall Delivery Status Item Description' in filtered_so.columns:
+                        st.subheader("Delivery Status Distribution")
+                        status_counts = filtered_so['Overall Delivery Status Item Description'].value_counts().reset_index()
+                        status_counts.columns = ['Status', 'Count']
+                        
+                        fig_status = px.pie(status_counts, values='Count', names='Status',
+                                           hole=0.4, color_discrete_sequence=px.colors.qualitative.Set3)
+                        fig_status.update_layout(height=400)
+                        st.plotly_chart(fig_status, use_container_width=True)
+                
+                # ===== DETAILED TABLE SECTION =====
+                st.markdown("### 📋 Detailed View")
+                
+                # Show selected columns
+                display_columns = [
+                    'Sold-To Party Name', 'Document Date', 'Sales Document',
+                    'Material', 'Material Description', 'Order Quantity (Item)',
+                    'Rejection Reason Description', 'Net Price', 'Net Value (Item)',
+                    'Overall Delivery Status Item Description', 'Confirmed Quantity (Item)',
+                    'Delivery Block Description'
+                ]
+                
+                # Filter only columns that exist
+                available_columns = [col for col in display_columns if col in filtered_so.columns]
+                display_df = filtered_so[available_columns].copy()
+                
+                # Format currency columns
+                if 'Net Price' in display_df.columns:
+                    display_df['Net Price'] = display_df['Net Price'].apply(lambda x: f"Rp {x:,.0f}" if pd.notna(x) else "")
+                if 'Net Value (Item)' in display_df.columns:
+                    display_df['Net Value (Item)'] = display_df['Net Value (Item)'].apply(lambda x: f"Rp {x:,.0f}" if pd.notna(x) else "")
+                
+                st.dataframe(
+                    display_df,
+                    use_container_width=True,
+                    hide_index=True,
+                    height=400
                 )
-            
-            with col_dl2:
-                # Download summary data
-                if 'Material' in filtered_so.columns and 'Material Description' in filtered_so.columns:
-                    summary_data = filtered_so.groupby(['Material', 'Material Description']).agg({
-                        'Order Quantity (Item)': 'sum',
-                        'Net Value (Item)': 'sum',
-                        'Sales Document': 'nunique'
-                    }).reset_index()
-                    
-                    summary_data = summary_data.rename(columns={
-                        'Order Quantity (Item)': 'Total Qty',
-                        'Net Value (Item)': 'Total Value',
-                        'Sales Document': 'SO Count'
-                    })
-                    
-                    csv_summary = summary_data.to_csv(index=False)
+                
+                # ===== SUMMARY BY STATUS =====
+                st.markdown("### 📊 Summary by Status")
+                
+                summary_cols = st.columns(3)
+                
+                with summary_cols[0]:
+                    # Summary by Delivery Status
+                    if 'Overall Delivery Status Item Description' in filtered_so.columns:
+                        st.subheader("By Delivery Status")
+                        delivery_summary = filtered_so.groupby('Overall Delivery Status Item Description').agg({
+                            'Order Quantity (Item)': 'sum',
+                            'Net Value (Item)': 'sum',
+                            'Sales Document': 'nunique'
+                        }).reset_index()
+                        
+                        delivery_summary = delivery_summary.rename(columns={
+                            'Order Quantity (Item)': 'Total Qty',
+                            'Net Value (Item)': 'Total Value',
+                            'Sales Document': 'SO Count'
+                        })
+                        
+                        st.dataframe(delivery_summary, use_container_width=True, hide_index=True)
+                
+                with summary_cols[1]:
+                    # Summary by Delivery Block
+                    if 'Delivery Block Description' in filtered_so.columns:
+                        st.subheader("By Delivery Block")
+                        block_summary = filtered_so.groupby('Delivery Block Description').agg({
+                            'Order Quantity (Item)': 'sum',
+                            'Net Value (Item)': 'sum',
+                            'Sales Document': 'nunique'
+                        }).reset_index()
+                        
+                        block_summary = block_summary.rename(columns={
+                            'Order Quantity (Item)': 'Total Qty',
+                            'Net Value (Item)': 'Total Value',
+                            'Sales Document': 'SO Count'
+                        })
+                        
+                        st.dataframe(block_summary, use_container_width=True, hide_index=True)
+                
+                with summary_cols[2]:
+                    # Summary by Rejection Reason
+                    if 'Rejection Reason Description' in filtered_so.columns:
+                        st.subheader("By Rejection Reason")
+                        rejection_summary = filtered_so.groupby('Rejection Reason Description').agg({
+                            'Order Quantity (Item)': 'sum',
+                            'Net Value (Item)': 'sum',
+                            'Sales Document': 'nunique'
+                        }).reset_index()
+                        
+                        rejection_summary = rejection_summary.rename(columns={
+                            'Order Quantity (Item)': 'Total Qty',
+                            'Net Value (Item)': 'Total Value',
+                            'Sales Document': 'SO Count'
+                        })
+                        
+                        st.dataframe(rejection_summary, use_container_width=True, hide_index=True)
+                
+                # ===== DOWNLOAD SECTION =====
+                st.markdown("### 📥 Download Data")
+                
+                col_dl1, col_dl2 = st.columns(2)
+                
+                with col_dl1:
+                    # Download filtered data
+                    csv_filtered = filtered_so.to_csv(index=False)
                     st.download_button(
-                        "Download SKU Summary (CSV)",
-                        data=csv_summary,
-                        file_name=f"SO_SKU_Summary_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                        "Download Filtered SO Data (CSV)",
+                        data=csv_filtered,
+                        file_name=f"SO_Filtered_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
                         mime="text/csv",
                         use_container_width=True
                     )
+                
+                with col_dl2:
+                    # Download summary data
+                    if 'Material' in filtered_so.columns and 'Material Description' in filtered_so.columns:
+                        summary_data = filtered_so.groupby(['Material', 'Material Description']).agg({
+                            'Order Quantity (Item)': 'sum',
+                            'Net Value (Item)': 'sum',
+                            'Sales Document': 'nunique'
+                        }).reset_index()
+                        
+                        summary_data = summary_data.rename(columns={
+                            'Order Quantity (Item)': 'Total Qty',
+                            'Net Value (Item)': 'Total Value',
+                            'Sales Document': 'SO Count'
+                        })
+                        
+                        csv_summary = summary_data.to_csv(index=False)
+                        st.download_button(
+                            "Download SKU Summary (CSV)",
+                            data=csv_summary,
+                            file_name=f"SO_SKU_Summary_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                            mime="text/csv",
+                            use_container_width=True
+                        )
 
 if __name__ == "__main__":
     main()
