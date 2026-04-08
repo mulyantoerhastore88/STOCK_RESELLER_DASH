@@ -1033,7 +1033,7 @@ def main():
     # === TAB 5: SALES VS INVENTORY ANALYSIS (NEW) ===
     with tab5:
         st.subheader("⚖️ Sales vs Inventory Analysis (Stock Coverage)")
-        st.caption("Membandingkan ketersediaan stok fisik (F213) dengan total permintaan dari Sales Order (SO).")
+        st.caption("Membandingkan ketersediaan stok fisik (F213) dengan total permintaan dari Sales Order (Hanya order LUNAS/Tanpa Block & Reject).")
         
         # Load ulang SO Data secara cepat (sudah di-cache)
         so_data_raw = load_sales_order_data()
@@ -1047,10 +1047,16 @@ def main():
                 'Unrestricted': 'sum'
             }).reset_index()
             
-            # 2. Agregasi Data Sales Order (Hanya hitung SO yang TIDAK di-reject)
+            # 2. Agregasi Data Sales Order (Hanya hitung SO yang SAH / LUNAS)
             so_active = so_data_raw.copy()
+            
+            # FILTER 1: Tidak di-reject (Blank Rejection)
             if 'Rejection Reason Description' in so_active.columns:
-                so_active = so_active[so_active['Rejection Reason Description'].isna()]
+                so_active = so_active[so_active['Rejection Reason Description'].isna() | (so_active['Rejection Reason Description'] == '')]
+                
+            # FILTER 2: Lunas / Paid (Blank Delivery Block) - SESUAI REQUEST BAPAK
+            if 'Delivery Block Description' in so_active.columns:
+                so_active = so_active[so_active['Delivery Block Description'].isna() | (so_active['Delivery Block Description'] == '')]
                 
             so_agg = so_active.groupby('Material').agg({
                 'Order Quantity (Item)': 'sum',
@@ -1066,13 +1072,16 @@ def main():
             # 4. Hitung Sisa Stok (Free Stock)
             inv_sales['Sisa Stok (Free Stock)'] = inv_sales['Unrestricted'] - inv_sales['Order Quantity (Item)']
             
-            conditions = [
-                inv_sales['Sisa Stok (Free Stock)'] < 0,
-                inv_sales['Sisa Stok (Free Stock)'] == 0,
-                inv_sales['Sisa Stok (Free Stock)'] > 0
-            ]
-            choices = ['🚨 Shortage (Kurang)', '✅ Just Enough', '📦 Surplus (Sisa)']
-            inv_sales['Status'] = np.select(conditions, choices, default='Unknown')
+            # PERBAIKAN BUG: Gunakan apply alih-alih np.select agar aman dari error array kosong
+            def get_inv_status(qty):
+                if qty < 0: return '🚨 Shortage (Kurang)'
+                elif qty == 0: return '✅ Just Enough'
+                else: return '📦 Surplus (Sisa)'
+                
+            if not inv_sales.empty:
+                inv_sales['Status'] = inv_sales['Sisa Stok (Free Stock)'].apply(get_inv_status)
+            else:
+                inv_sales['Status'] = 'Unknown'
             
             # 5. KPI Ringkasan
             tot_stock = inv_sales['Unrestricted'].sum()
@@ -1082,7 +1091,7 @@ def main():
             
             k1, k2, k3, k4 = st.columns(4)
             k1.metric("Total Stock On-Hand", f"{tot_stock:,.0f} Pcs")
-            k2.metric("Total SO Demand", f"{tot_demand:,.0f} Pcs", help="Total pesanan yang belum di-reject")
+            k2.metric("Total Valid Demand (Lunas)", f"{tot_demand:,.0f} Pcs", help="Total pesanan yang sudah lunas (Tanpa Block & Reject)")
             
             sisa_global = tot_stock - tot_demand
             k3.metric("Global Net Stock", f"{sisa_global:,.0f} Pcs", delta=f"{sisa_global:,.0f} Pcs", delta_color="normal" if sisa_global >= 0 else "inverse")
@@ -1098,6 +1107,7 @@ def main():
             
             with col_chart1:
                 st.markdown("##### 🚨 Top 10 SKU Shortage (Kekurangan Stok)")
+                st.caption("Pesanan LUNAS sudah masuk, tapi stok fisik kurang!")
                 if not shortage_df.empty:
                     shortage_df['Defisit'] = abs(shortage_df['Sisa Stok (Free Stock)'])
                     fig_short = px.bar(shortage_df, x='Defisit', y='Material Description', orientation='h', color_discrete_sequence=['#EF4444'])
@@ -1109,6 +1119,7 @@ def main():
             
             with col_chart2:
                 st.markdown("##### 📦 Top 10 SKU Surplus (Stok Nganggur)")
+                st.caption("Stok tersedia melimpah setelah dikurangi pesanan LUNAS.")
                 if not surplus_df.empty:
                     fig_surp = px.bar(surplus_df, x='Sisa Stok (Free Stock)', y='Material Description', orientation='h', color_discrete_sequence=['#10B981'])
                     fig_surp.update_traces(texttemplate='%{x:,.0f}', textposition='outside')
@@ -1121,6 +1132,7 @@ def main():
             st.markdown("### 📋 Detail Stock vs SO Demand")
             
             disp_inv = inv_sales[['Material', 'Material Description', 'Unrestricted', 'Order Quantity (Item)', 'Sisa Stok (Free Stock)', 'Status']].copy()
+            disp_inv = disp_inv.rename(columns={'Order Quantity (Item)': 'Valid Demand (SO Lunas)'})
             disp_inv = disp_inv.sort_values('Sisa Stok (Free Stock)')
             
             def highlight_shortage(val):
@@ -1132,7 +1144,7 @@ def main():
                 .map(highlight_shortage, subset=['Status'])\
                 .format({
                     'Unrestricted': "{:,.0f}",
-                    'Order Quantity (Item)': "{:,.0f}",
+                    'Valid Demand (SO Lunas)': "{:,.0f}",
                     'Sisa Stok (Free Stock)': "{:,.0f}"
                 })
                 
