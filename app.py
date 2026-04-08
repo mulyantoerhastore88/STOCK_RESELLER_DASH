@@ -617,11 +617,13 @@ def main():
     st.markdown("<br>", unsafe_allow_html=True)
 
     # --- TABS ---
-    tab1, tab2, tab3, tab4 = st.tabs([
+    # Urutan disesuaikan: Executive Summary -> SO Analysis -> SKU Inspector -> Batch Inv -> Sales vs Inv
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "📊 EXECUTIVE SUMMARY", 
+        "📈 SALES ORDER ANALYSIS", 
         "🔎 SKU INSPECTOR", 
-        "📋 BATCH INVENTORY", 
-        "📈 SALES ORDER ANALYSIS"
+        "📋 BATCH INVENTORY",
+        "⚖️ SALES VS INVENTORY"
     ])
 
     # === TAB 1: VISUALISASI ===
@@ -680,7 +682,6 @@ def main():
         if not alert_df.empty:
             alert_df = alert_df[display_cols].sort_values('Umur (Bulan)')
             
-            # Gunakan Pandas Styler untuk mewarnai baris yang bahaya (tanpa selectbox yang tidak bisa diklik)
             def highlight_status(val):
                 if val == 'Critical': return 'background-color: #fee2e2; color: #991b1b; font-weight: bold;'
                 elif val == 'Warning': return 'background-color: #fef3c7; color: #92400e; font-weight: bold;'
@@ -702,220 +703,8 @@ def main():
         else:
             st.success("✅ Clean! Tidak ada barang dengan sisa umur di bawah 18 bulan.")
 
-    # === TAB 2: DETAIL SKU ===
+    # === TAB 2: SALES ORDER ANALYSIS (Berpindah ke sini) ===
     with tab2:
-        col_search, col_brand = st.columns([2, 1])
-        
-        with col_brand:
-            if 'Product Hierarchy 2' in df.columns:
-                brand_opts = ["All Brands"] + sorted(df['Product Hierarchy 2'].astype(str).unique().tolist())
-                sel_brand = st.selectbox("Filter Brand:", brand_opts)
-                temp_df = df if sel_brand == "All Brands" else df[df['Product Hierarchy 2'] == sel_brand]
-            else:
-                temp_df = df
-        
-        with col_search:
-            # Buat search key
-            temp_df['Search_Key'] = temp_df['Material'].astype(str) + " | " + temp_df['Material Description'].astype(str)
-            search_list = sorted(temp_df['Search_Key'].unique().tolist())
-            selected_item = st.selectbox("🔍 Cari SKU / Nama Produk:", search_list)
-
-        if selected_item:
-            # Parse selected item
-            sel_code = selected_item.split(" | ")[0]
-            
-            # Cari data
-            item_data = df[df['Material'].astype(str) == sel_code]
-            
-            if not item_data.empty:
-                with st.container():
-                    # Tampilkan header
-                    desc = item_data['Material Description'].iloc[0]
-                    brand = item_data['Product Hierarchy 2'].iloc[0]
-                    
-                    st.markdown(f"""
-                    <div style='background-color: white; padding: 20px; border-radius: 10px; border: 1px solid #e0e0e0; margin-bottom: 20px;'>
-                        <h3 style='margin:0; color: #1f2937;'>📦 {desc}</h3>
-                        <p style='color: #6b7280;'>SKU: <b>{sel_code}</b> &nbsp;|&nbsp; Brand: <b>{brand}</b></p>
-                    </div>
-                    """, unsafe_allow_html=True)
-                    
-                    m1, m2, m3 = st.columns(3)
-                    m1.info(f"**Total Qty:** {item_data['Unrestricted'].sum():,.0f}")
-                    
-                    if 'Umur (Bulan)' in item_data.columns:
-                        m2.warning(f"**Batch Termuda:** {item_data['Umur (Bulan)'].max()} Bln")
-                        m3.error(f"**Batch Tertua:** {item_data['Umur (Bulan)'].min()} Bln")
-                    else:
-                        m2.warning("**Batch Termuda:** N/A")
-                        m3.error("**Batch Tertua:** N/A")
-                    
-                    st.markdown("#### 📅 Detail Batch & Expiry")
-                    
-                    # Tampilkan kolom yang tersedia
-                    display_cols = []
-                    for col in ['Batch', 'Unrestricted', 'Umur (Bulan)', 'Status']:
-                        if col in item_data.columns:
-                            display_cols.append(col)
-                    
-                    if display_cols:
-                        detail_view = item_data[display_cols]
-                        if 'Umur (Bulan)' in display_cols:
-                            detail_view = detail_view.sort_values('Umur (Bulan)')
-                        
-                        if 'Status' in display_cols:
-                            def highlight_row(val):
-                                if val == 'Critical': return 'background-color: #fee2e2; color: #991b1b'
-                                elif val == 'Warning': return 'background-color: #fef3c7; color: #92400e'
-                                elif val == 'Safe': return 'background-color: #d1fae5; color: #065f46'
-                                else: return ''
-                            
-                            st.dataframe(
-                                # --- PERBAIKAN BUG PANDAS DI SINI: applymap -> map ---
-                                detail_view.style.map(highlight_row, subset=['Status']),
-                                use_container_width=True,
-                                hide_index=True
-                            )
-                        else:
-                            st.dataframe(detail_view, use_container_width=True, hide_index=True)
-                    else:
-                        st.dataframe(item_data, use_container_width=True, hide_index=True)
-            else:
-                st.warning("Data tidak ditemukan")
-
-    # === TAB 3: BATCH INVENTORY ===
-    with tab3:
-        st.subheader("📋 Inventory per SKU dengan Detail Batch")
-        
-        # Group data by Material (SKU) and aggregate
-        if not df.empty:
-            # Get unique SKUs with multiple batches
-            sku_batch_counts = df.groupby('Material').agg({
-                'Material Description': 'first',
-                'Product Hierarchy 2': 'first',
-                'Batch': 'count',
-                'Unrestricted': 'sum',
-                'Umur (Bulan)': ['min', 'max'],
-                'Status': lambda x: x.mode()[0] if len(x.mode()) > 0 else 'Unknown'
-            }).reset_index()
-            
-            # Flatten column names
-            sku_batch_counts.columns = [
-                'SKU', 'Description', 'Brand', 'Batch Count', 
-                'Total Qty', 'Min Expiry', 'Max Expiry', 'Status'
-            ]
-            
-            # Filter SKUs with multiple batches
-            multi_batch_skus = sku_batch_counts[sku_batch_counts['Batch Count'] > 1]
-            
-            st.info(f"🔍 Ditemukan {len(multi_batch_skus)} SKU dengan multiple batch")
-            
-            if not multi_batch_skus.empty:
-                # Display summary table
-                st.dataframe(
-                    multi_batch_skus.sort_values('Total Qty', ascending=False),
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config={
-                        "Batch Count": st.column_config.NumberColumn(
-                            "Jumlah Batch",
-                            help="Total batch yang berbeda"
-                        ),
-                        "Total Qty": st.column_config.NumberColumn(
-                            "Total Stock",
-                            format="%d Pcs"
-                        ),
-                        "Min Expiry": st.column_config.NumberColumn(
-                            "Exp. Terdekat (Bln)",
-                            format="%.1f Bln"
-                        ),
-                        "Max Expiry": st.column_config.NumberColumn(
-                            "Exp. Terjauh (Bln)",
-                            format="%.1f Bln"
-                        )
-                    }
-                )
-                
-                # Select a SKU to see batch details
-                st.markdown("---")
-                st.subheader("🔍 Detail Batch per SKU")
-                
-                selected_sku = st.selectbox(
-                    "Pilih SKU untuk melihat detail batch:",
-                    options=multi_batch_skus['SKU'].tolist(),
-                    format_func=lambda x: f"{x} - {multi_batch_skus[multi_batch_skus['SKU']==x]['Description'].iloc[0]} ({multi_batch_skus[multi_batch_skus['SKU']==x]['Batch Count'].iloc[0]} batch)",
-                    key="tab3_sku_select"
-                )
-                
-                if selected_sku:
-                    sku_batches = df[df['Material'] == selected_sku]
-                    
-                    # Display batch details
-                    st.markdown(f"#### 📦 SKU: {selected_sku}")
-                    
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.metric("Total Stock", f"{sku_batches['Unrestricted'].sum():,.0f} pcs")
-                    with col2:
-                        st.metric("Jumlah Batch", len(sku_batches))
-                    with col3:
-                        status_counts = sku_batches['Status'].value_counts()
-                        main_status = status_counts.index[0] if len(status_counts) > 0 else 'Unknown'
-                        st.metric("Status Dominan", main_status)
-                    
-                    # Batch details table
-                    st.markdown("##### Detail Batch:")
-                    batch_detail = sku_batches[['Batch', 'Unrestricted', 'Umur (Bulan)', 'Status']].sort_values('Umur (Bulan)')
-                    
-                    # Add percentage column
-                    total_qty = batch_detail['Unrestricted'].sum()
-                    batch_detail['Percentage'] = (batch_detail['Unrestricted'] / total_qty * 100).round(1)
-                    
-                    st.dataframe(
-                        batch_detail,
-                        use_container_width=True,
-                        hide_index=True,
-                        column_config={
-                            "Unrestricted": st.column_config.NumberColumn(
-                                "Quantity",
-                                format="%d Pcs"
-                            ),
-                            "Umur (Bulan)": st.column_config.ProgressColumn(
-                                "Sisa Umur",
-                                format="%.1f Bln",
-                                min_value=0,
-                                max_value=36,
-                            ),
-                            "Percentage": st.column_config.ProgressColumn(
-                                "Persentase",
-                                format="%.1f%%",
-                                min_value=0,
-                                max_value=100,
-                            )
-                        }
-                    )
-                    
-                    # Visual chart
-                    fig = px.pie(
-                        batch_detail, 
-                        values='Unrestricted', 
-                        names='Batch',
-                        title=f"Distribusi Quantity per Batch - SKU {selected_sku}",
-                        color_discrete_sequence=px.colors.qualitative.Set3
-                    )
-                    fig.update_layout(
-                        plot_bgcolor="rgba(0,0,0,0)",
-                        paper_bgcolor="rgba(0,0,0,0)",
-                        font=dict(color="#1f2937")
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.success("✅ Semua SKU hanya memiliki 1 batch (tidak ada multiple batch)")
-        else:
-            st.warning("Tidak ada data untuk ditampilkan.")
-
-    # === TAB 4: SALES ORDER ANALYSIS (Tadinya Tab 5) ===
-    with tab4:
         st.subheader("📈 Sales Order Analysis (SO RSLR)")
         st.caption("Deep Dive Analitik Pesanan Pelanggan, Tren Waktu, dan Identifikasi Hambatan (Blocks & Rejects)")
         
@@ -973,12 +762,13 @@ def main():
             kpi1, kpi2, kpi3, kpi4 = st.columns(4)
             kpi1.metric("📄 Total SO Lines", f"{total_so:,}")
             kpi2.metric("📦 Total Quantity", f"{total_qty:,.0f}", "Units")
-            kpi3.metric("💰 Total Value", f"Rp {total_value/1e6:,.1f} Jt" if total_value >= 1e6 else f"Rp {total_value:,.0f}")
+            # --- PERBAIKAN: Angka Eksak untuk Total Value ---
+            kpi3.metric("💰 Total Value", f"Rp {total_value:,.0f}")
             kpi4.metric("👥 Unique Customers", f"{unique_customers}")
             
             st.divider()
 
-            # ===== 🌟 DAILY TREND & FUNNEL CHART =====
+            # ===== DAILY TREND & FUNNEL CHART =====
             col_trend, col_funnel = st.columns([2, 1])
 
             with col_trend:
@@ -1003,7 +793,6 @@ def main():
 
             with col_funnel:
                 st.subheader("🎯 Order Health Funnel")
-                # Hitung Funnel: Total -> Lolos Block -> Lolos Reject -> Fully Delivered
                 if all(c in so_df.columns for c in ['Delivery Block Description', 'Rejection Reason Description', 'Overall Delivery Status Item Description']):
                     tot_lines = len(so_df)
                     unblocked = len(so_df[so_df['Delivery Block Description'].isna()])
@@ -1072,6 +861,282 @@ def main():
                 display_df['Net Value (Item)'] = display_df['Net Value (Item)'].apply(lambda x: f"Rp {x:,.0f}" if pd.notna(x) else "")
             
             st.dataframe(display_df, use_container_width=True, hide_index=True, height=400)
+
+    # === TAB 3: DETAIL SKU ===
+    with tab3:
+        col_search, col_brand = st.columns([2, 1])
+        
+        with col_brand:
+            if 'Product Hierarchy 2' in df.columns:
+                brand_opts = ["All Brands"] + sorted(df['Product Hierarchy 2'].astype(str).unique().tolist())
+                sel_brand = st.selectbox("Filter Brand:", brand_opts)
+                temp_df = df if sel_brand == "All Brands" else df[df['Product Hierarchy 2'] == sel_brand]
+            else:
+                temp_df = df
+        
+        with col_search:
+            # Buat search key
+            temp_df['Search_Key'] = temp_df['Material'].astype(str) + " | " + temp_df['Material Description'].astype(str)
+            search_list = sorted(temp_df['Search_Key'].unique().tolist())
+            selected_item = st.selectbox("🔍 Cari SKU / Nama Produk:", search_list)
+
+        if selected_item:
+            # Parse selected item
+            sel_code = selected_item.split(" | ")[0]
+            
+            # Cari data
+            item_data = df[df['Material'].astype(str) == sel_code]
+            
+            if not item_data.empty:
+                with st.container():
+                    # Tampilkan header
+                    desc = item_data['Material Description'].iloc[0]
+                    brand = item_data['Product Hierarchy 2'].iloc[0]
+                    
+                    st.markdown(f"""
+                    <div style='background-color: white; padding: 20px; border-radius: 10px; border: 1px solid #e0e0e0; margin-bottom: 20px;'>
+                        <h3 style='margin:0; color: #1f2937;'>📦 {desc}</h3>
+                        <p style='color: #6b7280;'>SKU: <b>{sel_code}</b> &nbsp;|&nbsp; Brand: <b>{brand}</b></p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    m1, m2, m3 = st.columns(3)
+                    m1.info(f"**Total Qty:** {item_data['Unrestricted'].sum():,.0f}")
+                    
+                    if 'Umur (Bulan)' in item_data.columns:
+                        m2.warning(f"**Batch Termuda:** {item_data['Umur (Bulan)'].max()} Bln")
+                        m3.error(f"**Batch Tertua:** {item_data['Umur (Bulan)'].min()} Bln")
+                    else:
+                        m2.warning("**Batch Termuda:** N/A")
+                        m3.error("**Batch Tertua:** N/A")
+                    
+                    st.markdown("#### 📅 Detail Batch & Expiry")
+                    
+                    display_cols = []
+                    for col in ['Batch', 'Unrestricted', 'Umur (Bulan)', 'Status']:
+                        if col in item_data.columns:
+                            display_cols.append(col)
+                    
+                    if display_cols:
+                        detail_view = item_data[display_cols]
+                        if 'Umur (Bulan)' in display_cols:
+                            detail_view = detail_view.sort_values('Umur (Bulan)')
+                        
+                        if 'Status' in display_cols:
+                            def highlight_row(val):
+                                if val == 'Critical': return 'background-color: #fee2e2; color: #991b1b'
+                                elif val == 'Warning': return 'background-color: #fef3c7; color: #92400e'
+                                elif val == 'Safe': return 'background-color: #d1fae5; color: #065f46'
+                                else: return ''
+                            
+                            st.dataframe(
+                                detail_view.style.map(highlight_row, subset=['Status']),
+                                use_container_width=True,
+                                hide_index=True
+                            )
+                        else:
+                            st.dataframe(detail_view, use_container_width=True, hide_index=True)
+                    else:
+                        st.dataframe(item_data, use_container_width=True, hide_index=True)
+            else:
+                st.warning("Data tidak ditemukan")
+
+    # === TAB 4: BATCH INVENTORY ===
+    with tab4:
+        st.subheader("📋 Inventory per SKU dengan Detail Batch")
+        
+        if not df.empty:
+            sku_batch_counts = df.groupby('Material').agg({
+                'Material Description': 'first',
+                'Product Hierarchy 2': 'first',
+                'Batch': 'count',
+                'Unrestricted': 'sum',
+                'Umur (Bulan)': ['min', 'max'],
+                'Status': lambda x: x.mode()[0] if len(x.mode()) > 0 else 'Unknown'
+            }).reset_index()
+            
+            sku_batch_counts.columns = [
+                'SKU', 'Description', 'Brand', 'Batch Count', 
+                'Total Qty', 'Min Expiry', 'Max Expiry', 'Status'
+            ]
+            
+            multi_batch_skus = sku_batch_counts[sku_batch_counts['Batch Count'] > 1]
+            
+            st.info(f"🔍 Ditemukan {len(multi_batch_skus)} SKU dengan multiple batch")
+            
+            if not multi_batch_skus.empty:
+                st.dataframe(
+                    multi_batch_skus.sort_values('Total Qty', ascending=False),
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Batch Count": st.column_config.NumberColumn("Jumlah Batch", help="Total batch yang berbeda"),
+                        "Total Qty": st.column_config.NumberColumn("Total Stock", format="%d Pcs"),
+                        "Min Expiry": st.column_config.NumberColumn("Exp. Terdekat (Bln)", format="%.1f Bln"),
+                        "Max Expiry": st.column_config.NumberColumn("Exp. Terjauh (Bln)", format="%.1f Bln")
+                    }
+                )
+                
+                st.markdown("---")
+                st.subheader("🔍 Detail Batch per SKU")
+                
+                selected_sku = st.selectbox(
+                    "Pilih SKU untuk melihat detail batch:",
+                    options=multi_batch_skus['SKU'].tolist(),
+                    format_func=lambda x: f"{x} - {multi_batch_skus[multi_batch_skus['SKU']==x]['Description'].iloc[0]} ({multi_batch_skus[multi_batch_skus['SKU']==x]['Batch Count'].iloc[0]} batch)",
+                    key="tab4_sku_select"
+                )
+                
+                if selected_sku:
+                    sku_batches = df[df['Material'] == selected_sku]
+                    st.markdown(f"#### 📦 SKU: {selected_sku}")
+                    
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Total Stock", f"{sku_batches['Unrestricted'].sum():,.0f} pcs")
+                    with col2:
+                        st.metric("Jumlah Batch", len(sku_batches))
+                    with col3:
+                        status_counts = sku_batches['Status'].value_counts()
+                        main_status = status_counts.index[0] if len(status_counts) > 0 else 'Unknown'
+                        st.metric("Status Dominan", main_status)
+                    
+                    st.markdown("##### Detail Batch:")
+                    batch_detail = sku_batches[['Batch', 'Unrestricted', 'Umur (Bulan)', 'Status']].sort_values('Umur (Bulan)')
+                    
+                    total_qty = batch_detail['Unrestricted'].sum()
+                    batch_detail['Percentage'] = (batch_detail['Unrestricted'] / total_qty * 100).round(1)
+                    
+                    st.dataframe(
+                        batch_detail,
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "Unrestricted": st.column_config.NumberColumn("Quantity", format="%d Pcs"),
+                            "Umur (Bulan)": st.column_config.ProgressColumn("Sisa Umur", format="%.1f Bln", min_value=0, max_value=36),
+                            "Percentage": st.column_config.ProgressColumn("Persentase", format="%.1f%%", min_value=0, max_value=100)
+                        }
+                    )
+                    
+                    fig = px.pie(
+                        batch_detail, values='Unrestricted', names='Batch',
+                        title=f"Distribusi Quantity per Batch - SKU {selected_sku}",
+                        color_discrete_sequence=px.colors.qualitative.Set3
+                    )
+                    fig.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font=dict(color="#1f2937"))
+                    st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.success("✅ Semua SKU hanya memiliki 1 batch (tidak ada multiple batch)")
+        else:
+            st.warning("Tidak ada data untuk ditampilkan.")
+
+    # === TAB 5: SALES VS INVENTORY ANALYSIS (NEW) ===
+    with tab5:
+        st.subheader("⚖️ Sales vs Inventory Analysis (Stock Coverage)")
+        st.caption("Membandingkan ketersediaan stok fisik (F213) dengan total permintaan dari Sales Order (SO).")
+        
+        # Load ulang SO Data secara cepat (sudah di-cache)
+        so_data_raw = load_sales_order_data()
+        
+        if df.empty or so_data_raw.empty:
+            st.warning("⚠️ Data Stock atau Data SO belum lengkap, pastikan kedua file sudah dimuat.")
+        else:
+            # 1. Agregasi Data Stock
+            stock_agg = df.groupby('Material').agg({
+                'Material Description': 'first',
+                'Unrestricted': 'sum'
+            }).reset_index()
+            
+            # 2. Agregasi Data Sales Order (Hanya hitung SO yang TIDAK di-reject)
+            so_active = so_data_raw.copy()
+            if 'Rejection Reason Description' in so_active.columns:
+                so_active = so_active[so_active['Rejection Reason Description'].isna()]
+                
+            so_agg = so_active.groupby('Material').agg({
+                'Order Quantity (Item)': 'sum',
+                'Net Value (Item)': 'sum'
+            }).reset_index()
+            
+            # 3. Merge Stock & Demand
+            inv_sales = pd.merge(stock_agg, so_agg, on='Material', how='outer')
+            inv_sales['Unrestricted'] = inv_sales['Unrestricted'].fillna(0)
+            inv_sales['Order Quantity (Item)'] = inv_sales['Order Quantity (Item)'].fillna(0)
+            inv_sales['Material Description'] = inv_sales['Material Description'].fillna("Unknown Product")
+            
+            # 4. Hitung Sisa Stok (Free Stock)
+            inv_sales['Sisa Stok (Free Stock)'] = inv_sales['Unrestricted'] - inv_sales['Order Quantity (Item)']
+            
+            conditions = [
+                inv_sales['Sisa Stok (Free Stock)'] < 0,
+                inv_sales['Sisa Stok (Free Stock)'] == 0,
+                inv_sales['Sisa Stok (Free Stock)'] > 0
+            ]
+            choices = ['🚨 Shortage (Kurang)', '✅ Just Enough', '📦 Surplus (Sisa)']
+            inv_sales['Status'] = np.select(conditions, choices, default='Unknown')
+            
+            # 5. KPI Ringkasan
+            tot_stock = inv_sales['Unrestricted'].sum()
+            tot_demand = inv_sales['Order Quantity (Item)'].sum()
+            tot_shortage_qty = abs(inv_sales[inv_sales['Sisa Stok (Free Stock)'] < 0]['Sisa Stok (Free Stock)'].sum())
+            shortage_skus = len(inv_sales[inv_sales['Sisa Stok (Free Stock)'] < 0])
+            
+            k1, k2, k3, k4 = st.columns(4)
+            k1.metric("Total Stock On-Hand", f"{tot_stock:,.0f} Pcs")
+            k2.metric("Total SO Demand", f"{tot_demand:,.0f} Pcs", help="Total pesanan yang belum di-reject")
+            
+            sisa_global = tot_stock - tot_demand
+            k3.metric("Global Net Stock", f"{sisa_global:,.0f} Pcs", delta=f"{sisa_global:,.0f} Pcs", delta_color="normal" if sisa_global >= 0 else "inverse")
+            k4.metric("SKU Shortage (Kurang)", f"{shortage_skus} SKU", delta=f"-{tot_shortage_qty:,.0f} Pcs (Defisit)", delta_color="inverse")
+            
+            st.divider()
+            
+            # 6. Visualisasi Top Shortage & Surplus
+            col_chart1, col_chart2 = st.columns(2)
+            
+            shortage_df = inv_sales[inv_sales['Sisa Stok (Free Stock)'] < 0].sort_values('Sisa Stok (Free Stock)', ascending=True).head(10)
+            surplus_df = inv_sales[inv_sales['Sisa Stok (Free Stock)'] > 0].sort_values('Sisa Stok (Free Stock)', ascending=False).head(10)
+            
+            with col_chart1:
+                st.markdown("##### 🚨 Top 10 SKU Shortage (Kekurangan Stok)")
+                if not shortage_df.empty:
+                    shortage_df['Defisit'] = abs(shortage_df['Sisa Stok (Free Stock)'])
+                    fig_short = px.bar(shortage_df, x='Defisit', y='Material Description', orientation='h', color_discrete_sequence=['#EF4444'])
+                    fig_short.update_traces(texttemplate='%{x:,.0f}', textposition='outside')
+                    fig_short.update_layout(height=400, yaxis=dict(autorange="reversed"))
+                    st.plotly_chart(fig_short, use_container_width=True)
+                else:
+                    st.success("Aman! Tidak ada SKU yang kekurangan stok.")
+            
+            with col_chart2:
+                st.markdown("##### 📦 Top 10 SKU Surplus (Stok Nganggur)")
+                if not surplus_df.empty:
+                    fig_surp = px.bar(surplus_df, x='Sisa Stok (Free Stock)', y='Material Description', orientation='h', color_discrete_sequence=['#10B981'])
+                    fig_surp.update_traces(texttemplate='%{x:,.0f}', textposition='outside')
+                    fig_surp.update_layout(height=400, yaxis=dict(autorange="reversed"))
+                    st.plotly_chart(fig_surp, use_container_width=True)
+                else:
+                    st.warning("Tidak ada surplus.")
+                    
+            # 7. Detail Tabel (Smart Data Explorer)
+            st.markdown("### 📋 Detail Stock vs SO Demand")
+            
+            disp_inv = inv_sales[['Material', 'Material Description', 'Unrestricted', 'Order Quantity (Item)', 'Sisa Stok (Free Stock)', 'Status']].copy()
+            disp_inv = disp_inv.sort_values('Sisa Stok (Free Stock)')
+            
+            def highlight_shortage(val):
+                if 'Shortage' in str(val): return 'background-color: #fee2e2; color: #991b1b; font-weight: bold;'
+                elif 'Surplus' in str(val): return 'color: #065f46;'
+                return ''
+
+            styler = disp_inv.style\
+                .map(highlight_shortage, subset=['Status'])\
+                .format({
+                    'Unrestricted': "{:,.0f}",
+                    'Order Quantity (Item)': "{:,.0f}",
+                    'Sisa Stok (Free Stock)': "{:,.0f}"
+                })
+                
+            st.dataframe(styler, use_container_width=True, hide_index=True, height=400)
 
 if __name__ == "__main__":
     main()
