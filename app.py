@@ -661,49 +661,41 @@ def main():
             else:
                 st.info("Data status tidak tersedia")
 
-        st.subheader("🚨 Stock Alert: Barang Expired < 18 Bulan")
+        st.divider()
+        st.subheader("🚨 Stock Alert: Barang Expired < 18 Bulan (Critical & Warning)")
         
         alert_df = df[df['Remaining Expiry Date'] < 540].copy()
         
-        # Tentukan kolom yang akan ditampilkan
         display_cols = []
-        if 'Material' in alert_df.columns:
-            display_cols.append('Material')
-        if 'Material Description' in alert_df.columns:
-            display_cols.append('Material Description')
-        if 'Batch' in alert_df.columns:
-            display_cols.append('Batch')
-        
+        if 'Material' in alert_df.columns: display_cols.append('Material')
+        if 'Material Description' in alert_df.columns: display_cols.append('Material Description')
+        if 'Batch' in alert_df.columns: display_cols.append('Batch')
         display_cols.extend(['Unrestricted', 'Umur (Bulan)', 'Status'])
         
         if not alert_df.empty:
             alert_df = alert_df[display_cols].sort_values('Umur (Bulan)')
             
+            # Gunakan Pandas Styler untuk mewarnai baris yang bahaya (tanpa selectbox yang tidak bisa diklik)
+            def highlight_status(val):
+                if val == 'Critical': return 'background-color: #fee2e2; color: #991b1b; font-weight: bold;'
+                elif val == 'Warning': return 'background-color: #fef3c7; color: #92400e; font-weight: bold;'
+                return ''
+
+            styler = alert_df.style\
+                .map(highlight_status, subset=['Status'])\
+                .format({
+                    'Unrestricted': "{:,.0f} Pcs",
+                    'Umur (Bulan)': "{:.1f} Bln"
+                })
+
             st.dataframe(
-                alert_df,
+                styler,
                 use_container_width=True,
                 hide_index=True,
-                column_config={
-                    "Status": st.column_config.SelectboxColumn(
-                        "Status Kesehatan",
-                        width="medium",
-                        options=["Critical", "Warning", "Safe"],
-                        required=True,
-                    ),
-                    "Umur (Bulan)": st.column_config.ProgressColumn(
-                        "Sisa Umur (Bln)",
-                        format="%.1f Bln",
-                        min_value=0,
-                        max_value=30,
-                    ),
-                    "Unrestricted": st.column_config.NumberColumn(
-                        "Stock Qty",
-                        format="%d Pcs"
-                    )
-                }
+                height=300
             )
         else:
-            st.success("✅ Clean! Tidak ada barang dengan expired di bawah 18 bulan.")
+            st.success("✅ Clean! Tidak ada barang dengan sisa umur di bawah 18 bulan.")
 
     # === TAB 2: DETAIL SKU ===
     with tab2:
@@ -1230,6 +1222,7 @@ def main():
     # === TAB 5: SALES ORDER ANALYSIS ===
     with tab5:
         st.subheader("📈 Sales Order Analysis (SO RSLR)")
+        st.caption("Deep Dive Analitik Pesanan Pelanggan, Tren Waktu, dan Identifikasi Hambatan (Blocks & Rejects)")
         
         # Load Sales Order data
         with st.spinner("🔍 Loading Sales Order data..."):
@@ -1237,75 +1230,31 @@ def main():
         
         if so_data_raw.empty:
             st.info("ℹ️ Upload file dengan nama 'SO RSLR' ke Google Drive folder untuk melihat analysis")
-            
-            # Update sidebar to show SO data is not available
-            with st.sidebar:
-                if st.checkbox("📈 Show SO Data Status", value=False):
-                    st.warning("SO RSLR data tidak tersedia")
-            
         else:
             so_df = so_data_raw.copy()
             
-            # Show data info
-            st.info(f"📊 Data Sales Order: {len(so_df)} baris")
-            
-            with st.expander("🔍 Lihat data SO (10 baris pertama)"):
-                st.dataframe(so_df.head(10), use_container_width=True)
-            
-            # Update sidebar with SO download option
-            with st.sidebar:
-                if not so_data_raw.empty:
-                    st.markdown("---")
-                    st.subheader("📈 Sales Order Data")
-                    
-                    so_csv = so_data_raw.to_csv(index=False)
-                    st.download_button(
-                        label="📊 Download SO Data (CSV)",
-                        data=so_csv,
-                        file_name=f"SO_RSLR_Data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                        mime="text/csv",
-                        help="Download semua data Sales Order RSLR",
-                        use_container_width=True
-                    )
-                    st.caption(f"📊 SO: {len(so_data_raw)} rows")
+            # Format tanggal untuk Time-Series
+            if 'Document Date' in so_df.columns:
+                so_df['Document Date'] = pd.to_datetime(so_df['Document Date'], errors='coerce')
             
             # ===== FILTER SECTION =====
             st.markdown("### 🔍 Filter Data")
             
             col1, col2, col3 = st.columns(3)
-            
             with col1:
-                # Filter Rejection Reason
-                if 'Rejection Reason Description' in so_df.columns:
-                    rejection_options = ["All", "Blank"] + sorted(so_df['Rejection Reason Description'].dropna().unique().tolist())
-                    selected_rejection = st.selectbox("Rejection Reason:", rejection_options)
-                else:
-                    selected_rejection = "All"
-                    st.info("Kolom Rejection Reason tidak ditemukan")
-                
+                rejection_options = ["All", "Blank (No Rejection)"] + sorted(so_df['Rejection Reason Description'].dropna().unique().tolist()) if 'Rejection Reason Description' in so_df.columns else ["All"]
+                selected_rejection = st.selectbox("Rejection Reason:", rejection_options)
             with col2:
-                # Filter Delivery Status
-                if 'Overall Delivery Status Item Description' in so_df.columns:
-                    delivery_options = ["All"] + sorted(so_df['Overall Delivery Status Item Description'].dropna().unique().tolist())
-                    selected_delivery = st.selectbox("Delivery Status:", delivery_options)
-                else:
-                    selected_delivery = "All"
-                    st.info("Kolom Delivery Status tidak ditemukan")
-                
+                delivery_options = ["All"] + sorted(so_df['Overall Delivery Status Item Description'].dropna().unique().tolist()) if 'Overall Delivery Status Item Description' in so_df.columns else ["All"]
+                selected_delivery = st.selectbox("Delivery Status:", delivery_options)
             with col3:
-                # Filter Delivery Block
-                if 'Delivery Block Description' in so_df.columns:
-                    block_options = ["All", "Blank"] + sorted(so_df['Delivery Block Description'].dropna().unique().tolist())
-                    selected_block = st.selectbox("Delivery Block:", block_options)
-                else:
-                    selected_block = "All"
-                    st.info("Kolom Delivery Block tidak ditemukan")
+                block_options = ["All", "Blank (No Block)"] + sorted(so_df['Delivery Block Description'].dropna().unique().tolist()) if 'Delivery Block Description' in so_df.columns else ["All"]
+                selected_block = st.selectbox("Delivery Block:", block_options)
             
             # Apply filters
             filtered_so = so_df.copy()
-            
             if selected_rejection != "All" and 'Rejection Reason Description' in filtered_so.columns:
-                if selected_rejection == "Blank":
+                if selected_rejection == "Blank (No Rejection)":
                     filtered_so = filtered_so[filtered_so['Rejection Reason Description'].isna()]
                 else:
                     filtered_so = filtered_so[filtered_so['Rejection Reason Description'] == selected_rejection]
@@ -1314,62 +1263,100 @@ def main():
                 filtered_so = filtered_so[filtered_so['Overall Delivery Status Item Description'] == selected_delivery]
             
             if selected_block != "All" and 'Delivery Block Description' in filtered_so.columns:
-                if selected_block == "Blank":
+                if selected_block == "Blank (No Block)":
                     filtered_so = filtered_so[filtered_so['Delivery Block Description'].isna()]
                 else:
                     filtered_so = filtered_so[filtered_so['Delivery Block Description'] == selected_block]
             
             # ===== KPI SECTION =====
-            st.markdown("### 📊 Key Metrics")
-            
+            st.markdown("---")
             total_so = len(filtered_so)
             total_qty = filtered_so['Order Quantity (Item)'].sum() if 'Order Quantity (Item)' in filtered_so.columns else 0
             total_value = filtered_so['Net Value (Item)'].sum() if 'Net Value (Item)' in filtered_so.columns else 0
-            unique_sku = filtered_so['Material'].nunique() if 'Material' in filtered_so.columns else 0
             unique_customers = filtered_so['Sold-To Party Name'].nunique() if 'Sold-To Party Name' in filtered_so.columns else 0
-            unique_docs = filtered_so['Sales Document'].nunique() if 'Sales Document' in filtered_so.columns else 0
             
             kpi1, kpi2, kpi3, kpi4 = st.columns(4)
             kpi1.metric("📄 Total SO Lines", f"{total_so:,}")
-            kpi2.metric("📦 Total Quantity", f"{total_qty:,.0f}")
-            kpi3.metric("💰 Total Value", f"Rp {total_value:,.0f}")
+            kpi2.metric("📦 Total Quantity", f"{total_qty:,.0f}", "Units")
+            kpi3.metric("💰 Total Value", f"Rp {total_value/1e6:,.1f} Jt" if total_value >= 1e6 else f"Rp {total_value:,.0f}")
             kpi4.metric("👥 Unique Customers", f"{unique_customers}")
             
-            # ===== CHARTS SECTION =====
-            st.markdown("### 📈 Analysis Charts")
-            
+            st.divider()
+
+            # ===== 🌟 NEW: DAILY TREND & FUNNEL CHART =====
+            col_trend, col_funnel = st.columns([2, 1])
+
+            with col_trend:
+                st.subheader("📅 Daily Order Trend")
+                if 'Document Date' in filtered_so.columns:
+                    trend_df = filtered_so.groupby(filtered_so['Document Date'].dt.date).agg({
+                        'Net Value (Item)': 'sum',
+                        'Order Quantity (Item)': 'sum'
+                    }).reset_index()
+                    
+                    fig_trend = go.Figure()
+                    fig_trend.add_trace(go.Scatter(
+                        x=trend_df['Document Date'], y=trend_df['Net Value (Item)'],
+                        mode='lines+markers', name='Value (Rp)',
+                        line=dict(color='#3B82F6', width=3),
+                        fill='tozeroy', fillcolor='rgba(59, 130, 246, 0.1)'
+                    ))
+                    fig_trend.update_layout(height=350, hovermode="x unified", plot_bgcolor='white', margin=dict(t=10, b=10, l=10, r=10), yaxis_title="Net Value (Rp)")
+                    st.plotly_chart(fig_trend, use_container_width=True)
+                else:
+                    st.info("Kolom 'Document Date' tidak tersedia untuk tren waktu.")
+
+            with col_funnel:
+                st.subheader("🎯 Order Health Funnel")
+                # Hitung Funnel: Total -> Lolos Block -> Lolos Reject -> Fully Delivered
+                if all(c in so_df.columns for c in ['Delivery Block Description', 'Rejection Reason Description', 'Overall Delivery Status Item Description']):
+                    tot_lines = len(so_df)
+                    unblocked = len(so_df[so_df['Delivery Block Description'].isna()])
+                    unrejected = len(so_df[so_df['Delivery Block Description'].isna() & so_df['Rejection Reason Description'].isna()])
+                    
+                    delivered_cond = so_df['Overall Delivery Status Item Description'].str.contains('Fully', case=False, na=False)
+                    delivered = len(so_df[so_df['Delivery Block Description'].isna() & so_df['Rejection Reason Description'].isna() & delivered_cond])
+
+                    funnel_data = dict(
+                        number=[tot_lines, unblocked, unrejected, delivered],
+                        stage=["Total SO Masuk", "Lolos Delivery Block", "Lolos Rejection", "Fully Delivered"]
+                    )
+                    fig_funnel = px.funnel(funnel_data, x='number', y='stage')
+                    fig_funnel.update_traces(marker=dict(color=['#9CA3AF', '#3B82F6', '#10B981', '#059669']))
+                    fig_funnel.update_layout(height=350, margin=dict(t=10, b=10, l=10, r=10))
+                    st.plotly_chart(fig_funnel, use_container_width=True)
+                else:
+                    st.info("Kolom Status (Block/Reject/Delivery) tidak lengkap untuk Funnel.")
+
+            st.divider()
+
+            # ===== CHARTS SECTION (Customers & Status) =====
             col_chart1, col_chart2 = st.columns(2)
             
             with col_chart1:
-                # Top 10 Customers by Value
                 if 'Sold-To Party Name' in filtered_so.columns and 'Net Value (Item)' in filtered_so.columns:
-                    st.subheader("Top 10 Customers by Value")
+                    st.subheader("🏆 Top 10 Customers by Value")
                     customer_value = filtered_so.groupby('Sold-To Party Name')['Net Value (Item)'].sum().reset_index()
-                    customer_value = customer_value.sort_values('Net Value (Item)', ascending=False).head(10)
+                    customer_value = customer_value.sort_values('Net Value (Item)', ascending=True).tail(10)
                     
-                    fig_customer = px.bar(customer_value, x='Net Value (Item)', y='Sold-To Party Name',
-                                          orientation='h', text='Net Value (Item)',
-                                          color='Net Value (Item)', color_continuous_scale='Blues')
-                    fig_customer.update_traces(texttemplate='Rp %{text:,.0f}', textposition='outside')
-                    fig_customer.update_layout(height=400)
+                    fig_customer = px.bar(customer_value, x='Net Value (Item)', y='Sold-To Party Name', orientation='h')
+                    fig_customer.update_traces(marker_color='#6366F1', texttemplate='Rp %{x:,.0f}', textposition='outside')
+                    fig_customer.update_layout(height=400, plot_bgcolor='white', xaxis=dict(showgrid=True, gridcolor='#f3f4f6'))
                     st.plotly_chart(fig_customer, use_container_width=True)
             
             with col_chart2:
-                # Delivery Status Distribution
                 if 'Overall Delivery Status Item Description' in filtered_so.columns:
-                    st.subheader("Delivery Status Distribution")
+                    st.subheader("🚚 Delivery Status Distribution")
                     status_counts = filtered_so['Overall Delivery Status Item Description'].value_counts().reset_index()
                     status_counts.columns = ['Status', 'Count']
                     
-                    fig_status = px.pie(status_counts, values='Count', names='Status',
-                                       hole=0.4, color_discrete_sequence=px.colors.qualitative.Set3)
-                    fig_status.update_layout(height=400)
+                    fig_status = px.pie(status_counts, values='Count', names='Status', hole=0.4, color_discrete_sequence=px.colors.qualitative.Set2)
+                    fig_status.update_layout(height=400, legend=dict(orientation="h", y=-0.2))
                     st.plotly_chart(fig_status, use_container_width=True)
             
             # ===== DETAILED TABLE SECTION =====
             st.markdown("### 📋 Detailed View")
             
-            # Show selected columns
             display_columns = [
                 'Sold-To Party Name', 'Document Date', 'Sales Document',
                 'Material', 'Material Description', 'Order Quantity (Item)',
@@ -1378,22 +1365,18 @@ def main():
                 'Delivery Block Description'
             ]
             
-            # Filter only columns that exist
             available_columns = [col for col in display_columns if col in filtered_so.columns]
             display_df = filtered_so[available_columns].copy()
             
-            # Format currency columns
+            if 'Document Date' in display_df.columns:
+                display_df['Document Date'] = display_df['Document Date'].dt.strftime('%d-%b-%Y')
+                
             if 'Net Price' in display_df.columns:
                 display_df['Net Price'] = display_df['Net Price'].apply(lambda x: f"Rp {x:,.0f}" if pd.notna(x) else "")
             if 'Net Value (Item)' in display_df.columns:
                 display_df['Net Value (Item)'] = display_df['Net Value (Item)'].apply(lambda x: f"Rp {x:,.0f}" if pd.notna(x) else "")
             
-            st.dataframe(
-                display_df,
-                use_container_width=True,
-                hide_index=True,
-                height=400
-            )
+            st.dataframe(display_df, use_container_width=True, hide_index=True, height=400)
             
             # ===== SUMMARY BY STATUS =====
             st.markdown("### 📊 Summary by Status")
