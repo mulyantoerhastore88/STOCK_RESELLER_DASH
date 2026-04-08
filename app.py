@@ -737,8 +737,14 @@ def main():
 
         inv_df = pd.merge(stock_sku, sku_sales, on='Material', how='left').fillna(0)
         
-        # Hitung Cover Level (Bulan)
-        inv_df['Cover_Months'] = np.where(inv_df['Avg_Monthly_Sales'] > 0, inv_df['Stock'] / inv_df['Avg_Monthly_Sales'], 999)
+        # --- PERBAIKAN: Hitung Cover Level murni menggunakan Pandas (Tanpa Numpy) ---
+        inv_df['Cover_Months'] = 999.0  # Set default ke 999 (Anggap deadstock jika tidak ada sales)
+        
+        # Cari baris yang sales-nya lebih dari 0
+        valid_sales_mask = inv_df['Avg_Monthly_Sales'] > 0
+        
+        # Hitung cover bulan hanya untuk yang ada sales-nya
+        inv_df.loc[valid_sales_mask, 'Cover_Months'] = inv_df.loc[valid_sales_mask, 'Stock'] / inv_df.loc[valid_sales_mask, 'Avg_Monthly_Sales']
 
         # Klasifikasi Fast Moving (< 2 Bulan) & Deadstock (> 6 Bulan atau tidak ada sales)
         fast_moving = inv_df[(inv_df['Cover_Months'] > 0) & (inv_df['Cover_Months'] <= 2)].sort_values('Avg_Monthly_Sales', ascending=False)
