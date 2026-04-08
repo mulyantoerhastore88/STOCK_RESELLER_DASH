@@ -333,8 +333,9 @@ def process_data(df):
     def get_status(days):
         try:
             days = float(days)
-            if days < 360: return "Critical"
-            elif days < 540: return "Warning"
+            # 18 bulan = 18 * 30 = 540 hari
+            if days < 540: return "Critical" 
+            elif days < 720: return "Warning" # Contoh: 18-24 bulan masuk Warning
             else: return "Safe"
         except:
             return "Unknown"
@@ -605,14 +606,16 @@ def main():
     total_qty = df['Unrestricted'].sum()
     total_sku = df['Material'].nunique()
     
+    # Menghitung qty barang yang masuk kategori Critical (<18 Bulan)
     critical_qty = df[df['Status'] == 'Critical']['Unrestricted'].sum()
-    critical_sku_count = df[df['Status'] == 'Critical']['Material'].nunique()
     
-    kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-    kpi1.metric("📦 Total Stock", f"{total_qty:,.0f}", delta="Unit")
-    kpi2.metric("🔖 Total SKU", f"{total_sku}", delta="Varian")
-    kpi3.metric("🚨 Critical Qty (<12 Bln)", f"{critical_qty:,.0f}", delta="Items", delta_color="inverse")
-    kpi4.metric("⚠️ SKU Berisiko", f"{critical_sku_count}", delta="Perlu Action", delta_color="inverse")
+    # Dibagi menjadi 3 kolom saja karena satu card dihapus
+    kpi1, kpi2, kpi3 = st.columns(3)
+    kpi1.metric("📦 Total Stock", f"{total_qty:,.0f}", delta="Unit Total")
+    kpi2.metric("🔖 Total SKU", f"{total_sku}", delta="Varian Produk")
+    
+    # Label diubah menjadi <18 Bln sesuai request
+    kpi3.metric("🚨 Critical Qty (<18 Bln)", f"{critical_qty:,.0f}", delta="Items", delta_color="inverse")
 
     st.markdown("<br>", unsafe_allow_html=True)
 
