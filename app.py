@@ -606,16 +606,22 @@ def main():
     total_qty = df['Unrestricted'].sum()
     total_sku = df['Material'].nunique()
     
-    # Menghitung qty barang yang masuk kategori Critical (<18 Bulan)
+    # Menghitung qty & SKU barang yang masuk kategori Critical (<18 Bulan)
     critical_qty = df[df['Status'] == 'Critical']['Unrestricted'].sum()
+    critical_sku_count = df[df['Status'] == 'Critical']['Material'].nunique()
     
-    # Dibagi menjadi 3 kolom saja karena satu card dihapus
+    # Dibagi menjadi 3 kolom
     kpi1, kpi2, kpi3 = st.columns(3)
-    kpi1.metric("📦 Total Stock", f"{total_qty:,.0f}", delta="Unit Total")
-    kpi2.metric("🔖 Total SKU", f"{total_sku}", delta="Varian Produk")
+    kpi1.metric("📦 Total Stock", f"{total_qty:,.0f}", delta="Pcs Total")
+    kpi2.metric("🔖 Total SKU", f"{total_sku}", delta="Varian SKU Produk")
     
-    # Label diubah menjadi <18 Bln sesuai request
-    kpi3.metric("🚨 Critical Qty (<18 Bln)", f"{critical_qty:,.0f}", delta="Items", delta_color="inverse")
+    # Gabungkan info SKU dan Qty dalam satu Metric Card
+    kpi3.metric(
+        label="🚨 Critical Stock (<18 Bln)", 
+        value=f"{critical_sku_count} SKU", 
+        delta=f"Total: {critical_qty:,.0f} Pcs", 
+        delta_color="inverse"
+    )
 
     st.markdown("<br>", unsafe_allow_html=True)
 
