@@ -333,9 +333,8 @@ def process_data(df):
     def get_status(days):
         try:
             days = float(days)
-            # 18 bulan = 18 * 30 = 540 hari
-            if days < 540: return "Critical" 
-            elif days < 720: return "Warning" # Contoh: 18-24 bulan masuk Warning
+            # Hanya 2 Kondisi: < 540 hari (18 Bulan) = Warning, sisanya Safe
+            if days < 540: return "Warning" 
             else: return "Safe"
         except:
             return "Unknown"
@@ -602,29 +601,7 @@ def main():
 
     st.markdown("---")
 
-    # --- KPI CARDS ---
-    total_qty = df['Unrestricted'].sum()
-    total_sku = df['Material'].nunique()
     
-    # Menghitung qty & SKU barang yang masuk kategori Critical (<18 Bulan)
-    critical_qty = df[df['Status'] == 'Critical']['Unrestricted'].sum()
-    critical_sku_count = df[df['Status'] == 'Critical']['Material'].nunique()
-    
-    # Dibagi menjadi 3 kolom
-    kpi1, kpi2, kpi3 = st.columns(3)
-    kpi1.metric("📦 Total Stock", f"{total_qty:,.0f}", delta="Pcs Total")
-    kpi2.metric("🔖 Total SKU", f"{total_sku}", delta="Varian SKU Produk")
-    
-    # Gabungkan info SKU dan Qty dalam satu Metric Card
-    kpi3.metric(
-        label="🚨 Critical Stock (<18 Bln)", 
-        value=f"{critical_sku_count} SKU", 
-        delta=f"Total: {critical_qty:,.0f} Pcs", 
-        delta_color="inverse"
-    )
-
-    st.markdown("<br>", unsafe_allow_html=True)
-
     # --- TABS ---
     tab1, tab2, tab3, tab4 = st.tabs([
         "📊 EXECUTIVE SUMMARY", 
@@ -645,7 +622,12 @@ def main():
         valid_sales = pd.DataFrame()
         avg_sales_mo = 0
         global_cover = 0
-        total_stock = df['Unrestricted'].sum() if not df.empty else 0
+        
+        # PERHITUNGAN KPI (Dipindah ke dalam Tab 1)
+        total_qty = df['Unrestricted'].sum() if not df.empty else 0
+        total_sku = df['Material'].nunique() if not df.empty else 0
+        warning_qty = df[df['Status'] == 'Warning']['Unrestricted'].sum() if not df.empty else 0
+        warning_sku_count = df[df['Status'] == 'Warning']['Material'].nunique() if not df.empty else 0
         
         if not so_data_raw.empty:
             valid_sales = so_data_raw.copy()
@@ -659,25 +641,30 @@ def main():
             if 'Document Date' in valid_sales.columns:
                 valid_sales['Document Date'] = pd.to_datetime(valid_sales['Document Date'], errors='coerce')
                 
-                # Hitung jumlah bulan aktif untuk rata-rata
                 num_months = valid_sales['Document Date'].dt.to_period('M').nunique()
-                num_months = max(1, num_months) # Hindari pembagian 0
+                num_months = max(1, num_months) 
                 
                 total_sales_qty = valid_sales['Order Quantity (Item)'].sum() if 'Order Quantity (Item)' in valid_sales.columns else 0
                 avg_sales_mo = total_sales_qty / num_months
                 
                 if avg_sales_mo > 0:
-                    global_cover = total_stock / avg_sales_mo
+                    global_cover = total_qty / avg_sales_mo
 
-        # --- 2. EXECUTIVE KPI CARDS ---
-        k1, k2, k3, k4 = st.columns(4)
-        k1.metric("📦 Current Stock (F213)", f"{total_stock:,.0f}", "Total Unit Fisik")
-        k2.metric("📈 Avg Sales / Month", f"{avg_sales_mo:,.0f}", "Unit (Valid Order Only)")
+        # --- 2. EXECUTIVE KPI CARDS (RAPI 5 KOLOM TANPA DOUBLE) ---
+        k1, k2, k3, k4, k5 = st.columns(5)
         
-        # Color coding untuk cover level
+        k1.metric("📦 Total Stock", f"{total_qty:,.0f}", delta="Pcs Total")
+        k2.metric("🔖 Total SKU", f"{total_sku}", delta="Varian SKU Produk")
+        k3.metric(
+            label="⚠️ Warning (<18 Bln)", 
+            value=f"{warning_sku_count} SKU", 
+            delta=f"Total: {warning_qty:,.0f} Pcs", 
+            delta_color="inverse"
+        )
+        k4.metric("📈 Avg Sales / Month", f"{avg_sales_mo:,.0f}", "Unit (Valid Order Only)")
+        
         cover_color = "normal" if global_cover <= 6 else "inverse"
-        k3.metric("🛡️ Global Cover Level", f"{global_cover:.1f} Bulan", "Ketahanan Stok Saat Ini", delta_color=cover_color)
-        k4.metric("🔖 Active SKUs", f"{df['Material'].nunique()}", "Varian di Gudang")
+        k5.metric("🛡️ Global Cover", f"{global_cover:.1f} Bln", "Ketahanan Stok", delta_color=cover_color)
 
         st.divider()
 
@@ -692,32 +679,24 @@ def main():
             
             fig_trend = go.Figure()
             
-            # Bar: Sales Qty
             fig_trend.add_trace(go.Bar(
                 x=monthly_trend['Month'], y=monthly_trend['Qty'],
-                name='Sales Qty (Units)',
-                marker_color='#3B82F6',
-                text=monthly_trend['Qty'].apply(lambda x: f"{x:,.0f}"),
-                textposition='auto'
+                name='Sales Qty (Units)', marker_color='#3B82F6',
+                text=monthly_trend['Qty'].apply(lambda x: f"{x:,.0f}"), textposition='auto'
             ))
             
-            # Line: Sales Value
             fig_trend.add_trace(go.Scatter(
                 x=monthly_trend['Month'], y=monthly_trend['Value'],
-                name='Sales Value (Rp)',
-                mode='lines+markers',
-                line=dict(color='#10B981', width=3),
-                yaxis='y2'
+                name='Sales Value (Rp)', mode='lines+markers',
+                line=dict(color='#10B981', width=3), yaxis='y2'
             ))
             
             fig_trend.update_layout(
-                height=400,
-                xaxis=dict(tickformat="%b %Y"),
+                height=400, xaxis=dict(tickformat="%b %Y"),
                 yaxis=dict(title="Quantity (Units)", showgrid=False),
                 yaxis2=dict(title="Value (Rp)", overlaying='y', side='right', showgrid=True, gridcolor='rgba(0,0,0,0.05)'),
                 legend=dict(orientation="h", y=1.15, x=0.5, xanchor="center"),
-                plot_bgcolor='white',
-                margin=dict(t=50, b=20, l=20, r=20)
+                plot_bgcolor='white', margin=dict(t=50, b=20, l=20, r=20)
             )
             st.plotly_chart(fig_trend, use_container_width=True)
         else:
@@ -728,16 +707,12 @@ def main():
         # --- 4. INVENTORY HEALTH: FAST MOVING VS DEADSTOCK ---
         st.markdown("### 🚦 SKU Health: Fast Moving vs Deadstock")
         
-        # Hitung rata-rata penjualan per SKU
         if not valid_sales.empty:
-            sku_sales = valid_sales.groupby('Material').agg(
-                Total_Sales_Qty=('Order Quantity (Item)', 'sum')
-            ).reset_index()
+            sku_sales = valid_sales.groupby('Material').agg(Total_Sales_Qty=('Order Quantity (Item)', 'sum')).reset_index()
             sku_sales['Avg_Monthly_Sales'] = sku_sales['Total_Sales_Qty'] / num_months
         else:
             sku_sales = pd.DataFrame(columns=['Material', 'Total_Sales_Qty', 'Avg_Monthly_Sales'])
 
-        # Gabungkan stok dengan sales
         stock_sku = df.groupby('Material').agg(
             Desc=('Material Description', 'first'),
             Brand=('Product Hierarchy 2', 'first'),
@@ -746,16 +721,11 @@ def main():
 
         inv_df = pd.merge(stock_sku, sku_sales, on='Material', how='left').fillna(0)
         
-        # --- PERBAIKAN: Hitung Cover Level murni menggunakan Pandas (Tanpa Numpy) ---
-        inv_df['Cover_Months'] = 999.0  # Set default ke 999 (Anggap deadstock jika tidak ada sales)
-        
-        # Cari baris yang sales-nya lebih dari 0
+        # PERBAIKAN: Hitung Cover Level murni menggunakan Pandas (Tanpa Numpy)
+        inv_df['Cover_Months'] = 999.0
         valid_sales_mask = inv_df['Avg_Monthly_Sales'] > 0
-        
-        # Hitung cover bulan hanya untuk yang ada sales-nya
         inv_df.loc[valid_sales_mask, 'Cover_Months'] = inv_df.loc[valid_sales_mask, 'Stock'] / inv_df.loc[valid_sales_mask, 'Avg_Monthly_Sales']
 
-        # Klasifikasi Fast Moving (< 2 Bulan) & Deadstock (> 6 Bulan atau tidak ada sales)
         fast_moving = inv_df[(inv_df['Cover_Months'] > 0) & (inv_df['Cover_Months'] <= 2)].sort_values('Avg_Monthly_Sales', ascending=False)
         deadstock = inv_df[(inv_df['Stock'] > 0) & (inv_df['Cover_Months'] >= 6)].sort_values('Stock', ascending=False)
 
@@ -763,7 +733,6 @@ def main():
         
         with col_fm:
             st.markdown("##### 🚀 Top Fast Moving (Cover < 2 Bulan)")
-            st.caption("Barang laku keras. Waspada stok habis (OOS)!")
             if not fast_moving.empty:
                 disp_fm = fast_moving[['Material', 'Desc', 'Stock', 'Avg_Monthly_Sales', 'Cover_Months']].head(10).copy()
                 disp_fm['Stock'] = disp_fm['Stock'].apply(lambda x: f"{x:,.0f}")
@@ -775,7 +744,6 @@ def main():
 
         with col_ds:
             st.markdown("##### 🐌 Top Deadstock/Slow (Cover > 6 Bulan)")
-            st.caption("Stok menumpuk, perputaran lambat atau tidak ada sales.")
             if not deadstock.empty:
                 disp_ds = deadstock[['Material', 'Desc', 'Stock', 'Avg_Monthly_Sales', 'Cover_Months']].head(10).copy()
                 disp_ds['Stock'] = disp_ds['Stock'].apply(lambda x: f"{x:,.0f}")
@@ -787,7 +755,7 @@ def main():
 
         st.divider()
 
-        # --- 5. BRAND DISTRIBUTION & STOCK EXPIRY (Dari Tab 1 Lama) ---
+        # --- 5. BRAND DISTRIBUTION & STOCK EXPIRY ---
         row1_col1, row1_col2 = st.columns([2, 1])
         
         with row1_col1:
@@ -805,13 +773,14 @@ def main():
             st.markdown("##### 🧪 Kesehatan Umur Stok (Expiry)")
             if 'Status' in df.columns:
                 status_grp = df.groupby('Status')['Unrestricted'].sum().reset_index()
-                color_map = {"Critical": "#ef4444", "Warning": "#f59e0b", "Safe": "#10b981"}
+                # PERBAIKAN: Hanya 2 Warna (Warning & Safe)
+                color_map = {"Warning": "#f59e0b", "Safe": "#10b981"}
                 fig_pie = px.pie(status_grp, values='Unrestricted', names='Status', 
                                  color='Status', color_discrete_map=color_map, hole=0.6)
                 fig_pie.update_layout(legend=dict(orientation="h", y=-0.1), margin=dict(l=0, r=0, t=10, b=10))
                 st.plotly_chart(fig_pie, use_container_width=True)
 
-        st.markdown("##### 🚨 Stock Alert: Barang Expired < 18 Bulan (Critical & Warning)")
+        st.markdown("##### 🚨 Stock Alert: Barang Expired < 18 Bulan (Warning)")
         alert_df = df[df['Remaining Expiry Date'] < 540].copy()
         
         display_cols = []
@@ -823,8 +792,7 @@ def main():
         if not alert_df.empty:
             alert_df = alert_df[display_cols].sort_values('Umur (Bulan)')
             def highlight_status(val):
-                if val == 'Critical': return 'background-color: #fee2e2; color: #991b1b; font-weight: bold;'
-                elif val == 'Warning': return 'background-color: #fef3c7; color: #92400e; font-weight: bold;'
+                if val == 'Warning': return 'background-color: #fef3c7; color: #92400e; font-weight: bold;'
                 return ''
 
             styler = alert_df.style\
