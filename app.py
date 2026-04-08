@@ -623,7 +623,7 @@ def main():
         avg_sales_mo = 0
         global_cover = 0
         
-        # PERHITUNGAN KPI (Dipindah ke dalam Tab 1)
+        # PERHITUNGAN KPI
         total_qty = df['Unrestricted'].sum() if not df.empty else 0
         total_sku = df['Material'].nunique() if not df.empty else 0
         warning_qty = df[df['Status'] == 'Warning']['Unrestricted'].sum() if not df.empty else 0
@@ -650,21 +650,40 @@ def main():
                 if avg_sales_mo > 0:
                     global_cover = total_qty / avg_sales_mo
 
-        # --- 2. EXECUTIVE KPI CARDS (RAPI 5 KOLOM TANPA DOUBLE) ---
-        k1, k2, k3, k4, k5 = st.columns(5)
+        # --- 2. EXECUTIVE KPI CARDS (COLORED GRADIENT) ---
+        st.markdown("""
+        <style>
+            .summary-card {
+                border-radius: 12px; padding: 1.2rem; color: white;
+                box-shadow: 0 4px 10px rgba(0,0,0,0.05); transition: transform 0.3s;
+                position: relative; overflow: hidden; margin-bottom: 1rem;
+            }
+            .summary-card:hover { transform: translateY(-3px); }
+            .sc-title { font-size: 0.8rem; font-weight: 700; text-transform: uppercase; opacity: 0.9; margin-bottom: 5px; }
+            .sc-val { font-size: 1.6rem; font-weight: 800; margin-bottom: 5px; text-shadow: 0 1px 2px rgba(0,0,0,0.1); }
+            .sc-sub { font-size: 0.85rem; font-weight: 500; opacity: 0.95; }
+        </style>
+        """, unsafe_allow_html=True)
+
+        def render_summary_card(title, val, sub, bg):
+            return f'<div class="summary-card" style="background: {bg};"><div class="sc-title">{title}</div><div class="sc-val">{val}</div><div class="sc-sub">{sub}</div></div>'
+
+        c1, c2, c3, c4, c5 = st.columns(5)
         
-        k1.metric("📦 Total Stock", f"{total_qty:,.0f}", delta="Pcs Total")
-        k2.metric("🔖 Total SKU", f"{total_sku}", delta="Varian SKU Produk")
-        k3.metric(
-            label="⚠️ Warning (<18 Bln)", 
-            value=f"{warning_sku_count} SKU", 
-            delta=f"Total: {warning_qty:,.0f} Pcs", 
-            delta_color="inverse"
-        )
-        k4.metric("📈 Avg Sales / Month", f"{avg_sales_mo:,.0f}", "Unit (Valid Order Only)")
-        
-        cover_color = "normal" if global_cover <= 6 else "inverse"
-        k5.metric("🛡️ Global Cover", f"{global_cover:.1f} Bln", "Ketahanan Stok", delta_color=cover_color)
+        with c1:
+            st.markdown(render_summary_card("📦 Total Stock", f"{total_qty:,.0f}", "Pcs Total di F213", "linear-gradient(135deg, #3B82F6 0%, #2563EB 100%)"), unsafe_allow_html=True)
+        with c2:
+            st.markdown(render_summary_card("🔖 Total SKU", f"{total_sku:,}", "Varian SKU Produk", "linear-gradient(135deg, #8B5CF6 0%, #7C3AED 100%)"), unsafe_allow_html=True)
+        with c3:
+            # Jika ada warning, beri warna Oranye. Jika aman, beri warna Abu-abu santai.
+            warn_bg = "linear-gradient(135deg, #F59E0B 0%, #D97706 100%)" if warning_qty > 0 else "linear-gradient(135deg, #9CA3AF 0%, #6B7280 100%)"
+            st.markdown(render_summary_card("⚠️ Warning (<18 Bln)", f"{warning_sku_count} SKU", f"Total: {warning_qty:,.0f} Pcs", warn_bg), unsafe_allow_html=True)
+        with c4:
+            st.markdown(render_summary_card("📈 Avg Sales / Month", f"{avg_sales_mo:,.0f}", "Unit (Valid Order Only)", "linear-gradient(135deg, #10B981 0%, #059669 100%)"), unsafe_allow_html=True)
+        with c5:
+            # Jika cover > 6 bulan (overstock/lambat), warnai merah. Jika aman, warna Indigo.
+            cov_bg = "linear-gradient(135deg, #6366F1 0%, #4338CA 100%)" if global_cover <= 6 else "linear-gradient(135deg, #EF4444 0%, #B91C1C 100%)"
+            st.markdown(render_summary_card("🛡️ Global Cover", f"{global_cover:.1f} Bln", "Ketahanan Stok", cov_bg), unsafe_allow_html=True)
 
         st.divider()
 
@@ -704,7 +723,58 @@ def main():
 
         st.divider()
 
-        # --- 4. INVENTORY HEALTH: FAST MOVING VS DEADSTOCK ---
+        # --- 4. BRAND DISTRIBUTION & STOCK EXPIRY ---
+        row1_col1, row1_col2 = st.columns([2, 1])
+        
+        with row1_col1:
+            st.markdown("### 🏢 Distribusi Stock By Brand (Top 10)")
+            if 'Product Hierarchy 2' in df.columns:
+                brand_grp = df.groupby('Product Hierarchy 2')['Unrestricted'].sum().reset_index().sort_values('Unrestricted', ascending=True).tail(10)
+                fig_brand = px.bar(brand_grp, x='Unrestricted', y='Product Hierarchy 2', 
+                             text='Unrestricted', orientation='h',
+                             color='Unrestricted', color_continuous_scale='Mint')
+                fig_brand.update_traces(texttemplate='%{text:.2s}', textposition='outside', textfont_color='black')
+                fig_brand.update_layout(height=350, plot_bgcolor="white", paper_bgcolor="white", xaxis_title=None, yaxis_title=None, margin=dict(l=0, r=20, t=10, b=10))
+                st.plotly_chart(fig_brand, use_container_width=True)
+
+        with row1_col2:
+            st.markdown("### 🧪 Kesehatan Umur Stok (Expiry)")
+            if 'Status' in df.columns:
+                status_grp = df.groupby('Status')['Unrestricted'].sum().reset_index()
+                color_map = {"Warning": "#f59e0b", "Safe": "#10b981"}
+                fig_pie = px.pie(status_grp, values='Unrestricted', names='Status', 
+                                 color='Status', color_discrete_map=color_map, hole=0.6)
+                fig_pie.update_layout(height=350, legend=dict(orientation="h", y=-0.1), margin=dict(l=0, r=0, t=10, b=10))
+                st.plotly_chart(fig_pie, use_container_width=True)
+
+        st.divider()
+
+        # --- 5. STOCK ALERT: EXPIRY < 18 BULAN ---
+        st.markdown("### 🚨 Stock Alert: Barang Expired < 18 Bulan (Warning)")
+        alert_df = df[df['Remaining Expiry Date'] < 540].copy()
+        
+        display_cols = []
+        if 'Material' in alert_df.columns: display_cols.append('Material')
+        if 'Material Description' in alert_df.columns: display_cols.append('Material Description')
+        if 'Batch' in alert_df.columns: display_cols.append('Batch')
+        display_cols.extend(['Unrestricted', 'Umur (Bulan)', 'Status'])
+        
+        if not alert_df.empty:
+            alert_df = alert_df[display_cols].sort_values('Umur (Bulan)')
+            def highlight_status(val):
+                if val == 'Warning': return 'background-color: #fef3c7; color: #92400e; font-weight: bold;'
+                return ''
+
+            styler = alert_df.style\
+                .map(highlight_status, subset=['Status'])\
+                .format({'Unrestricted': "{:,.0f} Pcs", 'Umur (Bulan)': "{:.1f} Bln"})
+            st.dataframe(styler, use_container_width=True, hide_index=True, height=250)
+        else:
+            st.success("✅ Clean! Tidak ada barang dengan sisa umur di bawah 18 bulan.")
+
+        st.divider()
+
+        # --- 6. INVENTORY HEALTH: FAST MOVING VS DEADSTOCK ---
         st.markdown("### 🚦 SKU Health: Fast Moving vs Deadstock")
         
         if not valid_sales.empty:
@@ -721,7 +791,7 @@ def main():
 
         inv_df = pd.merge(stock_sku, sku_sales, on='Material', how='left').fillna(0)
         
-        # PERBAIKAN: Hitung Cover Level murni menggunakan Pandas (Tanpa Numpy)
+        # Hitung Cover Level murni menggunakan Pandas (Tanpa Numpy)
         inv_df['Cover_Months'] = 999.0
         valid_sales_mask = inv_df['Avg_Monthly_Sales'] > 0
         inv_df.loc[valid_sales_mask, 'Cover_Months'] = inv_df.loc[valid_sales_mask, 'Stock'] / inv_df.loc[valid_sales_mask, 'Avg_Monthly_Sales']
@@ -752,55 +822,6 @@ def main():
                 st.dataframe(disp_ds, use_container_width=True, hide_index=True)
             else:
                 st.success("Gudang sehat! Tidak ada Deadstock parah.")
-
-        st.divider()
-
-        # --- 5. BRAND DISTRIBUTION & STOCK EXPIRY ---
-        row1_col1, row1_col2 = st.columns([2, 1])
-        
-        with row1_col1:
-            st.markdown("##### 🏢 Distribusi Brand Gudang (Top 10)")
-            if 'Product Hierarchy 2' in df.columns:
-                brand_grp = df.groupby('Product Hierarchy 2')['Unrestricted'].sum().reset_index().sort_values('Unrestricted', ascending=True).tail(10)
-                fig_brand = px.bar(brand_grp, x='Unrestricted', y='Product Hierarchy 2', 
-                             text='Unrestricted', orientation='h',
-                             color='Unrestricted', color_continuous_scale='Mint')
-                fig_brand.update_traces(texttemplate='%{text:.2s}', textposition='outside', textfont_color='black')
-                fig_brand.update_layout(plot_bgcolor="white", paper_bgcolor="white", xaxis_title=None, yaxis_title=None, margin=dict(l=0, r=20, t=10, b=10))
-                st.plotly_chart(fig_brand, use_container_width=True)
-
-        with row1_col2:
-            st.markdown("##### 🧪 Kesehatan Umur Stok (Expiry)")
-            if 'Status' in df.columns:
-                status_grp = df.groupby('Status')['Unrestricted'].sum().reset_index()
-                # PERBAIKAN: Hanya 2 Warna (Warning & Safe)
-                color_map = {"Warning": "#f59e0b", "Safe": "#10b981"}
-                fig_pie = px.pie(status_grp, values='Unrestricted', names='Status', 
-                                 color='Status', color_discrete_map=color_map, hole=0.6)
-                fig_pie.update_layout(legend=dict(orientation="h", y=-0.1), margin=dict(l=0, r=0, t=10, b=10))
-                st.plotly_chart(fig_pie, use_container_width=True)
-
-        st.markdown("##### 🚨 Stock Alert: Barang Expired < 18 Bulan (Warning)")
-        alert_df = df[df['Remaining Expiry Date'] < 540].copy()
-        
-        display_cols = []
-        if 'Material' in alert_df.columns: display_cols.append('Material')
-        if 'Material Description' in alert_df.columns: display_cols.append('Material Description')
-        if 'Batch' in alert_df.columns: display_cols.append('Batch')
-        display_cols.extend(['Unrestricted', 'Umur (Bulan)', 'Status'])
-        
-        if not alert_df.empty:
-            alert_df = alert_df[display_cols].sort_values('Umur (Bulan)')
-            def highlight_status(val):
-                if val == 'Warning': return 'background-color: #fef3c7; color: #92400e; font-weight: bold;'
-                return ''
-
-            styler = alert_df.style\
-                .map(highlight_status, subset=['Status'])\
-                .format({'Unrestricted': "{:,.0f} Pcs", 'Umur (Bulan)': "{:.1f} Bln"})
-            st.dataframe(styler, use_container_width=True, hide_index=True, height=250)
-        else:
-            st.success("✅ Clean! Tidak ada barang dengan sisa umur di bawah 18 bulan.")
 
     # === TAB 2: SALES ORDER ANALYSIS ===
     with tab2:
