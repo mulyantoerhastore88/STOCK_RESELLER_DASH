@@ -617,60 +617,186 @@ def main():
     st.markdown("<br>", unsafe_allow_html=True)
 
     # --- TABS ---
-    # Urutan disesuaikan: Executive Summary -> SO Analysis -> SKU Inspector -> Batch Inv -> Sales vs Inv
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4 = st.tabs([
         "📊 EXECUTIVE SUMMARY", 
         "📈 SALES ORDER ANALYSIS", 
         "🔎 SKU INSPECTOR", 
-        "📋 BATCH INVENTORY",
-        "⚖️ SALES VS INVENTORY"
+        "📋 BATCH INVENTORY"
     ])
 
-    # === TAB 1: VISUALISASI ===
+    # === TAB 1: EXECUTIVE SUMMARY (COMPREHENSIVE ANALYTICS) ===
     with tab1:
+        st.subheader("📊 Executive Summary: Inventory & Sales Performance")
+        st.caption("Helicopter view posisi stok fisik F213 saat ini, proyeksi ketahanan stok (Cover Level), dan tren sales yang sudah tereksekusi (Delivered/Blank).")
+
+        # --- 1. LOAD & PREPARE VALID SALES DATA ---
+        with st.spinner("Mengkalkulasi metrik Sales & Inventory..."):
+            so_data_raw = load_sales_order_data()
+            
+        valid_sales = pd.DataFrame()
+        avg_sales_mo = 0
+        global_cover = 0
+        total_stock = df['Unrestricted'].sum() if not df.empty else 0
+        
+        if not so_data_raw.empty:
+            valid_sales = so_data_raw.copy()
+            
+            # FILTER HANYA ORDER YANG SAH (Block = Blank, Reject = Blank)
+            if 'Rejection Reason Description' in valid_sales.columns:
+                valid_sales = valid_sales[valid_sales['Rejection Reason Description'].isna() | (valid_sales['Rejection Reason Description'] == '')]
+            if 'Delivery Block Description' in valid_sales.columns:
+                valid_sales = valid_sales[valid_sales['Delivery Block Description'].isna() | (valid_sales['Delivery Block Description'] == '')]
+                
+            if 'Document Date' in valid_sales.columns:
+                valid_sales['Document Date'] = pd.to_datetime(valid_sales['Document Date'], errors='coerce')
+                
+                # Hitung jumlah bulan aktif untuk rata-rata
+                num_months = valid_sales['Document Date'].dt.to_period('M').nunique()
+                num_months = max(1, num_months) # Hindari pembagian 0
+                
+                total_sales_qty = valid_sales['Order Quantity (Item)'].sum() if 'Order Quantity (Item)' in valid_sales.columns else 0
+                avg_sales_mo = total_sales_qty / num_months
+                
+                if avg_sales_mo > 0:
+                    global_cover = total_stock / avg_sales_mo
+
+        # --- 2. EXECUTIVE KPI CARDS ---
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("📦 Current Stock (F213)", f"{total_stock:,.0f}", "Total Unit Fisik")
+        k2.metric("📈 Avg Sales / Month", f"{avg_sales_mo:,.0f}", "Unit (Valid Order Only)")
+        
+        # Color coding untuk cover level
+        cover_color = "normal" if global_cover <= 6 else "inverse"
+        k3.metric("🛡️ Global Cover Level", f"{global_cover:.1f} Bulan", "Ketahanan Stok Saat Ini", delta_color=cover_color)
+        k4.metric("🔖 Active SKUs", f"{df['Material'].nunique()}", "Varian di Gudang")
+
+        st.divider()
+
+        # --- 3. MONTHLY SALES TREND (BAR + LINE) ---
+        st.markdown("### 📈 Monthly Sales Realization (Valid Orders)")
+        if not valid_sales.empty and 'Document Date' in valid_sales.columns:
+            monthly_trend = valid_sales.groupby(valid_sales['Document Date'].dt.to_period('M')).agg(
+                Qty=('Order Quantity (Item)', 'sum'),
+                Value=('Net Value (Item)', 'sum')
+            ).reset_index()
+            monthly_trend['Month'] = monthly_trend['Document Date'].dt.to_timestamp()
+            
+            fig_trend = go.Figure()
+            
+            # Bar: Sales Qty
+            fig_trend.add_trace(go.Bar(
+                x=monthly_trend['Month'], y=monthly_trend['Qty'],
+                name='Sales Qty (Units)',
+                marker_color='#3B82F6',
+                text=monthly_trend['Qty'].apply(lambda x: f"{x:,.0f}"),
+                textposition='auto'
+            ))
+            
+            # Line: Sales Value
+            fig_trend.add_trace(go.Scatter(
+                x=monthly_trend['Month'], y=monthly_trend['Value'],
+                name='Sales Value (Rp)',
+                mode='lines+markers',
+                line=dict(color='#10B981', width=3),
+                yaxis='y2'
+            ))
+            
+            fig_trend.update_layout(
+                height=400,
+                xaxis=dict(tickformat="%b %Y"),
+                yaxis=dict(title="Quantity (Units)", showgrid=False),
+                yaxis2=dict(title="Value (Rp)", overlaying='y', side='right', showgrid=True, gridcolor='rgba(0,0,0,0.05)'),
+                legend=dict(orientation="h", y=1.15, x=0.5, xanchor="center"),
+                plot_bgcolor='white',
+                margin=dict(t=50, b=20, l=20, r=20)
+            )
+            st.plotly_chart(fig_trend, use_container_width=True)
+        else:
+            st.info("Belum ada data Sales Order valid (Blank) untuk menampilkan tren.")
+
+        st.divider()
+
+        # --- 4. INVENTORY HEALTH: FAST MOVING VS DEADSTOCK ---
+        st.markdown("### 🚦 SKU Health: Fast Moving vs Deadstock")
+        
+        # Hitung rata-rata penjualan per SKU
+        if not valid_sales.empty:
+            sku_sales = valid_sales.groupby('Material').agg(
+                Total_Sales_Qty=('Order Quantity (Item)', 'sum')
+            ).reset_index()
+            sku_sales['Avg_Monthly_Sales'] = sku_sales['Total_Sales_Qty'] / num_months
+        else:
+            sku_sales = pd.DataFrame(columns=['Material', 'Total_Sales_Qty', 'Avg_Monthly_Sales'])
+
+        # Gabungkan stok dengan sales
+        stock_sku = df.groupby('Material').agg(
+            Desc=('Material Description', 'first'),
+            Brand=('Product Hierarchy 2', 'first'),
+            Stock=('Unrestricted', 'sum')
+        ).reset_index()
+
+        inv_df = pd.merge(stock_sku, sku_sales, on='Material', how='left').fillna(0)
+        
+        # Hitung Cover Level (Bulan)
+        inv_df['Cover_Months'] = np.where(inv_df['Avg_Monthly_Sales'] > 0, inv_df['Stock'] / inv_df['Avg_Monthly_Sales'], 999)
+
+        # Klasifikasi Fast Moving (< 2 Bulan) & Deadstock (> 6 Bulan atau tidak ada sales)
+        fast_moving = inv_df[(inv_df['Cover_Months'] > 0) & (inv_df['Cover_Months'] <= 2)].sort_values('Avg_Monthly_Sales', ascending=False)
+        deadstock = inv_df[(inv_df['Stock'] > 0) & (inv_df['Cover_Months'] >= 6)].sort_values('Stock', ascending=False)
+
+        col_fm, col_ds = st.columns(2)
+        
+        with col_fm:
+            st.markdown("##### 🚀 Top Fast Moving (Cover < 2 Bulan)")
+            st.caption("Barang laku keras. Waspada stok habis (OOS)!")
+            if not fast_moving.empty:
+                disp_fm = fast_moving[['Material', 'Desc', 'Stock', 'Avg_Monthly_Sales', 'Cover_Months']].head(10).copy()
+                disp_fm['Stock'] = disp_fm['Stock'].apply(lambda x: f"{x:,.0f}")
+                disp_fm['Avg_Monthly_Sales'] = disp_fm['Avg_Monthly_Sales'].apply(lambda x: f"{x:,.0f}/bln")
+                disp_fm['Cover_Months'] = disp_fm['Cover_Months'].apply(lambda x: f"{x:.1f} bln")
+                st.dataframe(disp_fm, use_container_width=True, hide_index=True)
+            else:
+                st.info("Tidak ada SKU Fast Moving saat ini.")
+
+        with col_ds:
+            st.markdown("##### 🐌 Top Deadstock/Slow (Cover > 6 Bulan)")
+            st.caption("Stok menumpuk, perputaran lambat atau tidak ada sales.")
+            if not deadstock.empty:
+                disp_ds = deadstock[['Material', 'Desc', 'Stock', 'Avg_Monthly_Sales', 'Cover_Months']].head(10).copy()
+                disp_ds['Stock'] = disp_ds['Stock'].apply(lambda x: f"{x:,.0f}")
+                disp_ds['Avg_Monthly_Sales'] = disp_ds['Avg_Monthly_Sales'].apply(lambda x: f"{x:,.0f}/bln")
+                disp_ds['Cover_Months'] = disp_ds['Cover_Months'].apply(lambda x: "No Sales" if x > 900 else f"{x:.1f} bln")
+                st.dataframe(disp_ds, use_container_width=True, hide_index=True)
+            else:
+                st.success("Gudang sehat! Tidak ada Deadstock parah.")
+
+        st.divider()
+
+        # --- 5. BRAND DISTRIBUTION & STOCK EXPIRY (Dari Tab 1 Lama) ---
         row1_col1, row1_col2 = st.columns([2, 1])
         
         with row1_col1:
-            st.subheader("Distribusi Brand (Top 10)")
+            st.markdown("##### 🏢 Distribusi Brand Gudang (Top 10)")
             if 'Product Hierarchy 2' in df.columns:
                 brand_grp = df.groupby('Product Hierarchy 2')['Unrestricted'].sum().reset_index().sort_values('Unrestricted', ascending=True).tail(10)
-                
-                fig = px.bar(brand_grp, x='Unrestricted', y='Product Hierarchy 2', 
+                fig_brand = px.bar(brand_grp, x='Unrestricted', y='Product Hierarchy 2', 
                              text='Unrestricted', orientation='h',
                              color='Unrestricted', color_continuous_scale='Mint')
-                fig.update_traces(texttemplate='%{text:.2s}', textposition='outside', textfont_color='black')
-                fig.update_layout(
-                    plot_bgcolor="rgba(0,0,0,0)", 
-                    paper_bgcolor="rgba(0,0,0,0)", 
-                    xaxis_title=None, 
-                    yaxis_title=None,
-                    font=dict(color="#1f2937")
-                )
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.info("Kolom Brand tidak ditemukan")
+                fig_brand.update_traces(texttemplate='%{text:.2s}', textposition='outside', textfont_color='black')
+                fig_brand.update_layout(plot_bgcolor="white", paper_bgcolor="white", xaxis_title=None, yaxis_title=None, margin=dict(l=0, r=20, t=10, b=10))
+                st.plotly_chart(fig_brand, use_container_width=True)
 
         with row1_col2:
-            st.subheader("Kesehatan Stock")
+            st.markdown("##### 🧪 Kesehatan Umur Stok (Expiry)")
             if 'Status' in df.columns:
                 status_grp = df.groupby('Status')['Unrestricted'].sum().reset_index()
                 color_map = {"Critical": "#ef4444", "Warning": "#f59e0b", "Safe": "#10b981"}
-                
                 fig_pie = px.pie(status_grp, values='Unrestricted', names='Status', 
                                  color='Status', color_discrete_map=color_map, hole=0.6)
-                fig_pie.update_layout(
-                    plot_bgcolor="rgba(0,0,0,0)", 
-                    paper_bgcolor="rgba(0,0,0,0)", 
-                    legend=dict(orientation="h", y=-0.1),
-                    font=dict(color="#1f2937")
-                )
+                fig_pie.update_layout(legend=dict(orientation="h", y=-0.1), margin=dict(l=0, r=0, t=10, b=10))
                 st.plotly_chart(fig_pie, use_container_width=True)
-            else:
-                st.info("Data status tidak tersedia")
 
-        st.divider()
-        st.subheader("🚨 Stock Alert: Barang Expired < 18 Bulan (Critical & Warning)")
-        
+        st.markdown("##### 🚨 Stock Alert: Barang Expired < 18 Bulan (Critical & Warning)")
         alert_df = df[df['Remaining Expiry Date'] < 540].copy()
         
         display_cols = []
@@ -681,7 +807,6 @@ def main():
         
         if not alert_df.empty:
             alert_df = alert_df[display_cols].sort_values('Umur (Bulan)')
-            
             def highlight_status(val):
                 if val == 'Critical': return 'background-color: #fee2e2; color: #991b1b; font-weight: bold;'
                 elif val == 'Warning': return 'background-color: #fef3c7; color: #92400e; font-weight: bold;'
@@ -689,17 +814,8 @@ def main():
 
             styler = alert_df.style\
                 .map(highlight_status, subset=['Status'])\
-                .format({
-                    'Unrestricted': "{:,.0f} Pcs",
-                    'Umur (Bulan)': "{:.1f} Bln"
-                })
-
-            st.dataframe(
-                styler,
-                use_container_width=True,
-                hide_index=True,
-                height=300
-            )
+                .format({'Unrestricted': "{:,.0f} Pcs", 'Umur (Bulan)': "{:.1f} Bln"})
+            st.dataframe(styler, use_container_width=True, hide_index=True, height=250)
         else:
             st.success("✅ Clean! Tidak ada barang dengan sisa umur di bawah 18 bulan.")
 
@@ -1030,125 +1146,6 @@ def main():
         else:
             st.warning("Tidak ada data untuk ditampilkan.")
 
-    # === TAB 5: SALES VS INVENTORY ANALYSIS (NEW) ===
-    with tab5:
-        st.subheader("⚖️ Sales vs Inventory Analysis (Stock Coverage)")
-        st.caption("Membandingkan ketersediaan stok fisik (F213) dengan total permintaan dari Sales Order (Hanya order LUNAS/Tanpa Block & Reject).")
-        
-        # Load ulang SO Data secara cepat (sudah di-cache)
-        so_data_raw = load_sales_order_data()
-        
-        if df.empty or so_data_raw.empty:
-            st.warning("⚠️ Data Stock atau Data SO belum lengkap, pastikan kedua file sudah dimuat.")
-        else:
-            # 1. Agregasi Data Stock
-            stock_agg = df.groupby('Material').agg({
-                'Material Description': 'first',
-                'Unrestricted': 'sum'
-            }).reset_index()
-            
-            # 2. Agregasi Data Sales Order (Hanya hitung SO yang SAH / LUNAS)
-            so_active = so_data_raw.copy()
-            
-            # FILTER 1: Tidak di-reject (Blank Rejection)
-            if 'Rejection Reason Description' in so_active.columns:
-                so_active = so_active[so_active['Rejection Reason Description'].isna() | (so_active['Rejection Reason Description'] == '')]
-                
-            # FILTER 2: Lunas / Paid (Blank Delivery Block) - SESUAI REQUEST BAPAK
-            if 'Delivery Block Description' in so_active.columns:
-                so_active = so_active[so_active['Delivery Block Description'].isna() | (so_active['Delivery Block Description'] == '')]
-                
-            so_agg = so_active.groupby('Material').agg({
-                'Order Quantity (Item)': 'sum',
-                'Net Value (Item)': 'sum'
-            }).reset_index()
-            
-            # 3. Merge Stock & Demand
-            inv_sales = pd.merge(stock_agg, so_agg, on='Material', how='outer')
-            inv_sales['Unrestricted'] = inv_sales['Unrestricted'].fillna(0)
-            inv_sales['Order Quantity (Item)'] = inv_sales['Order Quantity (Item)'].fillna(0)
-            inv_sales['Material Description'] = inv_sales['Material Description'].fillna("Unknown Product")
-            
-            # 4. Hitung Sisa Stok (Free Stock)
-            inv_sales['Sisa Stok (Free Stock)'] = inv_sales['Unrestricted'] - inv_sales['Order Quantity (Item)']
-            
-            # PERBAIKAN BUG: Gunakan apply alih-alih np.select agar aman dari error array kosong
-            def get_inv_status(qty):
-                if qty < 0: return '🚨 Shortage (Kurang)'
-                elif qty == 0: return '✅ Just Enough'
-                else: return '📦 Surplus (Sisa)'
-                
-            if not inv_sales.empty:
-                inv_sales['Status'] = inv_sales['Sisa Stok (Free Stock)'].apply(get_inv_status)
-            else:
-                inv_sales['Status'] = 'Unknown'
-            
-            # 5. KPI Ringkasan
-            tot_stock = inv_sales['Unrestricted'].sum()
-            tot_demand = inv_sales['Order Quantity (Item)'].sum()
-            tot_shortage_qty = abs(inv_sales[inv_sales['Sisa Stok (Free Stock)'] < 0]['Sisa Stok (Free Stock)'].sum())
-            shortage_skus = len(inv_sales[inv_sales['Sisa Stok (Free Stock)'] < 0])
-            
-            k1, k2, k3, k4 = st.columns(4)
-            k1.metric("Total Stock On-Hand", f"{tot_stock:,.0f} Pcs")
-            k2.metric("Total Valid Demand (Lunas)", f"{tot_demand:,.0f} Pcs", help="Total pesanan yang sudah lunas (Tanpa Block & Reject)")
-            
-            sisa_global = tot_stock - tot_demand
-            k3.metric("Global Net Stock", f"{sisa_global:,.0f} Pcs", delta=f"{sisa_global:,.0f} Pcs", delta_color="normal" if sisa_global >= 0 else "inverse")
-            k4.metric("SKU Shortage (Kurang)", f"{shortage_skus} SKU", delta=f"-{tot_shortage_qty:,.0f} Pcs (Defisit)", delta_color="inverse")
-            
-            st.divider()
-            
-            # 6. Visualisasi Top Shortage & Surplus
-            col_chart1, col_chart2 = st.columns(2)
-            
-            shortage_df = inv_sales[inv_sales['Sisa Stok (Free Stock)'] < 0].sort_values('Sisa Stok (Free Stock)', ascending=True).head(10)
-            surplus_df = inv_sales[inv_sales['Sisa Stok (Free Stock)'] > 0].sort_values('Sisa Stok (Free Stock)', ascending=False).head(10)
-            
-            with col_chart1:
-                st.markdown("##### 🚨 Top 10 SKU Shortage (Kekurangan Stok)")
-                st.caption("Pesanan LUNAS sudah masuk, tapi stok fisik kurang!")
-                if not shortage_df.empty:
-                    shortage_df['Defisit'] = abs(shortage_df['Sisa Stok (Free Stock)'])
-                    fig_short = px.bar(shortage_df, x='Defisit', y='Material Description', orientation='h', color_discrete_sequence=['#EF4444'])
-                    fig_short.update_traces(texttemplate='%{x:,.0f}', textposition='outside')
-                    fig_short.update_layout(height=400, yaxis=dict(autorange="reversed"))
-                    st.plotly_chart(fig_short, use_container_width=True)
-                else:
-                    st.success("Aman! Tidak ada SKU yang kekurangan stok.")
-            
-            with col_chart2:
-                st.markdown("##### 📦 Top 10 SKU Surplus (Stok Nganggur)")
-                st.caption("Stok tersedia melimpah setelah dikurangi pesanan LUNAS.")
-                if not surplus_df.empty:
-                    fig_surp = px.bar(surplus_df, x='Sisa Stok (Free Stock)', y='Material Description', orientation='h', color_discrete_sequence=['#10B981'])
-                    fig_surp.update_traces(texttemplate='%{x:,.0f}', textposition='outside')
-                    fig_surp.update_layout(height=400, yaxis=dict(autorange="reversed"))
-                    st.plotly_chart(fig_surp, use_container_width=True)
-                else:
-                    st.warning("Tidak ada surplus.")
-                    
-            # 7. Detail Tabel (Smart Data Explorer)
-            st.markdown("### 📋 Detail Stock vs SO Demand")
-            
-            disp_inv = inv_sales[['Material', 'Material Description', 'Unrestricted', 'Order Quantity (Item)', 'Sisa Stok (Free Stock)', 'Status']].copy()
-            disp_inv = disp_inv.rename(columns={'Order Quantity (Item)': 'Valid Demand (SO Lunas)'})
-            disp_inv = disp_inv.sort_values('Sisa Stok (Free Stock)')
-            
-            def highlight_shortage(val):
-                if 'Shortage' in str(val): return 'background-color: #fee2e2; color: #991b1b; font-weight: bold;'
-                elif 'Surplus' in str(val): return 'color: #065f46;'
-                return ''
-
-            styler = disp_inv.style\
-                .map(highlight_shortage, subset=['Status'])\
-                .format({
-                    'Unrestricted': "{:,.0f}",
-                    'Valid Demand (SO Lunas)': "{:,.0f}",
-                    'Sisa Stok (Free Stock)': "{:,.0f}"
-                })
-                
-            st.dataframe(styler, use_container_width=True, hide_index=True, height=400)
-
+    
 if __name__ == "__main__":
     main()
