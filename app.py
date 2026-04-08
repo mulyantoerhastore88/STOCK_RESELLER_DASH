@@ -847,7 +847,7 @@ def main():
             # ===== 🔍 FILTER SECTION =====
             st.markdown("### 🔍 Filter Data")
             
-            # --- Filter Baris 1: Slider Bulan (NEW) ---
+            # --- Filter Baris 1: Slider Bulan ---
             if 'Document Date' in so_df.columns and not so_df.empty:
                 # Ambil list bulan unik untuk slider
                 so_df['Month_Year'] = so_df['Document Date'].dt.to_period('M')
@@ -901,65 +901,68 @@ def main():
                 else:
                     filtered_so = filtered_so[filtered_so['Delivery Block Description'] == selected_block]
             
-            # ===== 📊 KPI SECTION =====
+            # ===== 📊 KPI SECTION (COLORED CARDS) =====
             st.markdown("---")
             total_so_lines = len(filtered_so)
             total_qty = filtered_so['Order Quantity (Item)'].sum() if 'Order Quantity (Item)' in filtered_so.columns else 0
             total_value = filtered_so['Net Value (Item)'].sum() if 'Net Value (Item)' in filtered_so.columns else 0
             unique_customers = filtered_so['Sold-To Party Name'].nunique() if 'Sold-To Party Name' in filtered_so.columns else 0
             
-            kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-            kpi1.metric("📄 Total SO Lines", f"{total_so_lines:,}")
-            kpi2.metric("📦 Total Quantity", f"{total_qty:,.0f}", "Units")
-            kpi3.metric("💰 Total Value", f"Rp {total_value:,.0f}")
-            kpi4.metric("👥 Unique Customers", f"{unique_customers}")
+            st.markdown("""
+            <style>
+                .so-card {
+                    border-radius: 12px; padding: 1.2rem; color: white;
+                    box-shadow: 0 4px 10px rgba(0,0,0,0.05); transition: transform 0.3s;
+                    position: relative; overflow: hidden; margin-bottom: 1rem;
+                }
+                .so-card:hover { transform: translateY(-3px); }
+                .so-title { font-size: 0.8rem; font-weight: 700; text-transform: uppercase; opacity: 0.9; margin-bottom: 5px; }
+                .so-val { font-size: 1.6rem; font-weight: 800; margin-bottom: 5px; text-shadow: 0 1px 2px rgba(0,0,0,0.1); }
+                .so-sub { font-size: 0.85rem; font-weight: 500; opacity: 0.95; }
+            </style>
+            """, unsafe_allow_html=True)
+
+            def render_so_card(title, val, sub, bg):
+                return f'<div class="so-card" style="background: {bg};"><div class="so-title">{title}</div><div class="so-val">{val}</div><div class="so-sub">{sub}</div></div>'
+
+            k1, k2, k3, k4 = st.columns(4)
+            
+            with k1:
+                st.markdown(render_so_card("📄 Total SO Lines", f"{total_so_lines:,}", "Baris Pesanan", "linear-gradient(135deg, #8B5CF6 0%, #7C3AED 100%)"), unsafe_allow_html=True)
+            with k2:
+                st.markdown(render_so_card("📦 Total Quantity", f"{total_qty:,.0f}", "Units", "linear-gradient(135deg, #3B82F6 0%, #2563EB 100%)"), unsafe_allow_html=True)
+            with k3:
+                st.markdown(render_so_card("💰 Total Value", f"Rp {total_value:,.0f}", "Net Value", "linear-gradient(135deg, #10B981 0%, #059669 100%)"), unsafe_allow_html=True)
+            with k4:
+                st.markdown(render_so_card("👥 Unique Customers", f"{unique_customers}", "Pembeli", "linear-gradient(135deg, #F59E0B 0%, #D97706 100%)"), unsafe_allow_html=True)
             
             st.divider()
 
-            # ===== 📈 TREND & FUNNEL =====
-            col_trend, col_funnel = st.columns([2, 1])
-
-            with col_trend:
-                st.subheader("📅 Daily Order Trend")
-                if not filtered_so.empty:
-                    trend_df = filtered_so.groupby(filtered_so['Document Date'].dt.date).agg({
-                        'Net Value (Item)': 'sum',
-                        'Order Quantity (Item)': 'sum'
-                    }).reset_index()
-                    
-                    fig_trend = go.Figure()
-                    fig_trend.add_trace(go.Scatter(
-                        x=trend_df['Document Date'], y=trend_df['Net Value (Item)'],
-                        mode='lines+markers', name='Value (Rp)',
-                        line=dict(color='#3B82F6', width=3),
-                        fill='tozeroy', fillcolor='rgba(59, 130, 246, 0.1)'
-                    ))
-                    fig_trend.update_layout(height=350, hovermode="x unified", plot_bgcolor='white', margin=dict(t=10, b=10, l=10, r=10), yaxis_title="Net Value (Rp)")
-                    st.plotly_chart(fig_trend, use_container_width=True)
-                else:
-                    st.info("Pilih periode yang memiliki data untuk melihat tren.")
-
-            with col_funnel:
-                st.subheader("🎯 Order Health Funnel")
-                if not filtered_so.empty and all(c in filtered_so.columns for c in ['Delivery Block Description', 'Rejection Reason Description', 'Overall Delivery Status Item Description']):
-                    tot_lines = len(filtered_so)
-                    unblocked = len(filtered_so[filtered_so['Delivery Block Description'].isna() | (filtered_so['Delivery Block Description'] == '')])
-                    unrejected = len(filtered_so[(filtered_so['Delivery Block Description'].isna() | (filtered_so['Delivery Block Description'] == '')) & 
-                                                (filtered_so['Rejection Reason Description'].isna() | (filtered_so['Rejection Reason Description'] == ''))])
-                    
-                    delivered_cond = filtered_so['Overall Delivery Status Item Description'].str.contains('Fully', case=False, na=False)
-                    delivered = len(filtered_so[(filtered_so['Delivery Block Description'].isna() | (filtered_so['Delivery Block Description'] == '')) & 
-                                               (filtered_so['Rejection Reason Description'].isna() | (filtered_so['Rejection Reason Description'] == '')) & 
-                                               delivered_cond])
-
-                    funnel_data = dict(
-                        number=[tot_lines, unblocked, unrejected, delivered],
-                        stage=["Total SO", "Lolos Block", "Lolos Reject", "Fully Delivered"]
-                    )
-                    fig_funnel = px.funnel(funnel_data, x='number', y='stage')
-                    fig_funnel.update_traces(marker=dict(color=['#9CA3AF', '#3B82F6', '#10B981', '#059669']))
-                    fig_funnel.update_layout(height=350, margin=dict(t=10, b=10, l=10, r=10))
-                    st.plotly_chart(fig_funnel, use_container_width=True)
+            # ===== 📈 DAILY TREND (FULL WIDTH, NO FUNNEL) =====
+            st.subheader("📅 Daily Order Trend")
+            if not filtered_so.empty and 'Document Date' in filtered_so.columns:
+                trend_df = filtered_so.groupby(filtered_so['Document Date'].dt.date).agg({
+                    'Net Value (Item)': 'sum',
+                    'Order Quantity (Item)': 'sum'
+                }).reset_index()
+                
+                fig_trend = go.Figure()
+                fig_trend.add_trace(go.Scatter(
+                    x=trend_df['Document Date'], y=trend_df['Net Value (Item)'],
+                    mode='lines+markers', name='Value (Rp)',
+                    line=dict(color='#3B82F6', width=3),
+                    fill='tozeroy', fillcolor='rgba(59, 130, 246, 0.1)'
+                ))
+                fig_trend.update_layout(
+                    height=350, 
+                    hovermode="x unified", 
+                    plot_bgcolor='white', 
+                    margin=dict(t=10, b=10, l=10, r=10), 
+                    yaxis_title="Net Value (Rp)"
+                )
+                st.plotly_chart(fig_trend, use_container_width=True)
+            else:
+                st.info("Pilih periode yang memiliki data untuk melihat tren.")
 
             st.divider()
 
